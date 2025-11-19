@@ -36,11 +36,32 @@ mvn clean install
 
 3. **실행**
 
-```bash
-# 방법 1: Maven으로 실행
-mvn exec:java -Dexec.mainClass="com.subtracker.SubscriptionTrackerApplication"
+#### 🌐 방법 1: 웹 인터페이스 (권장)
 
-# 방법 2: JAR 파일 실행
+```bash
+# Windows
+run-web.bat
+
+# Mac/Linux
+./run-web.sh
+
+# 또는 직접 실행
+mvn exec:java -Dexec.mainClass="com.subtracker.SubscriptionTrackerApplication"
+# 메뉴에서 1번 선택
+```
+
+브라우저에서 http://localhost:8080 접속
+
+#### 💻 방법 2: 콘솔 인터페이스
+
+```bash
+mvn exec:java -Dexec.mainClass="com.subtracker.SubscriptionTrackerApplication"
+# 메뉴에서 2번 선택
+```
+
+#### 📦 방법 3: JAR 파일 실행
+
+```bash
 java -jar target/subscription-tracker-1.0.0-jar-with-dependencies.jar
 ```
 
@@ -141,9 +162,3 @@ MIT License
 3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
 4. Push to the Branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
-
-## 📞 문의
-
-프로젝트에 대한 문의사항이 있으시면 이슈를 등록해주세요.
-
----

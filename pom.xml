@@ -57,14 +57,19 @@
             <scope>test</scope>
         </dependency>
         
-        <!-- 추후 REST API 추가시 사용 (일단 주석) -->
-        <!-- 
+        <!-- REST API & Web Server -->
         <dependency>
             <groupId>com.sparkjava</groupId>
             <artifactId>spark-core</artifactId>
             <version>2.9.4</version>
         </dependency>
-        -->
+        
+        <!-- JSON 처리 -->
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+            <version>2.10.1</version>
+        </dependency>
     </dependencies>
     
     <build>
