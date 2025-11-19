@@ -1,0 +1,213 @@
+package com.subtracker.application;
+
+import com.subtracker.domain.model.AnalysisHistory;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * 두 분석 결과 비교
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class ComparisonResult {
+
+    @Data
+    @Builder
+    public static class SubscriptionDiff {
+        private String serviceName;
+        private String changeType; // NEW, REMOVED, CHANGED, UNCHANGED
+        private BigDecimal oldAmount;
+        private BigDecimal newAmount;
+        private String oldStatus;
+        private String newStatus;
+    }
+
+    private LocalDateTime oldAnalysisDate;
+    private LocalDateTime newAnalysisDate;
+
+    private int oldSubscriptionCount;
+    private int newSubscriptionCount;
+    private int subscriptionCountDiff;
+
+    private BigDecimal oldMonthlyTotal;
+    private BigDecimal newMonthlyTotal;
+    private BigDecimal monthlyTotalDiff;
+    private double monthlyTotalChangePercent;
+
+    private BigDecimal oldAnnualProjection;
+    private BigDecimal newAnnualProjection;
+    private BigDecimal annualProjectionDiff;
+
+    @Builder.Default
+    private List<SubscriptionDiff> newSubscriptions = new ArrayList<>();
+
+    @Builder.Default
+    private List<SubscriptionDiff> removedSubscriptions = new ArrayList<>();
+
+    @Builder.Default
+    private List<SubscriptionDiff> changedSubscriptions = new ArrayList<>();
+
+    /**
+     * 두 분석 이력 비교
+     */
+    public static ComparisonResult compare(AnalysisHistory older, AnalysisHistory newer) {
+        ComparisonResult result = new ComparisonResult();
+
+        result.oldAnalysisDate = older.getAnalysisDate();
+        result.newAnalysisDate = newer.getAnalysisDate();
+
+        result.oldSubscriptionCount = older.getSubscriptionCount();
+        result.newSubscriptionCount = newer.getSubscriptionCount();
+        result.subscriptionCountDiff = newer.getSubscriptionCount() - older.getSubscriptionCount();
+
+        result.oldMonthlyTotal = older.getMonthlyTotal();
+        result.newMonthlyTotal = newer.getMonthlyTotal();
+        result.monthlyTotalDiff = newer.getMonthlyTotal().subtract(older.getMonthlyTotal());
+
+        if (older.getMonthlyTotal().compareTo(BigDecimal.ZERO) > 0) {
+            result.monthlyTotalChangePercent = result.monthlyTotalDiff
+                    .divide(older.getMonthlyTotal(), 4, java.math.RoundingMode.HALF_UP)
+                    .multiply(BigDecimal.valueOf(100))
+                    .doubleValue();
+        }
+
+        result.oldAnnualProjection = older.getAnnualProjection();
+        result.newAnnualProjection = newer.getAnnualProjection();
+        result.annualProjectionDiff = newer.getAnnualProjection().subtract(older.getAnnualProjection());
+
+        // 구독 변화 분석
+        compareSubscriptions(older, newer, result);
+
+        return result;
+    }
+
+    /**
+     * 구독 목록 비교
+     */
+    private static void compareSubscriptions(AnalysisHistory older, AnalysisHistory newer,
+            ComparisonResult result) {
+        var oldSubs = older.getSubscriptions().stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        s -> s.getServiceName(), s -> s));
+
+        var newSubs = newer.getSubscriptions().stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        s -> s.getServiceName(), s -> s));
+
+        // 신규 구독
+        for (var newSub : newer.getSubscriptions()) {
+            if (!oldSubs.containsKey(newSub.getServiceName())) {
+                result.newSubscriptions.add(SubscriptionDiff.builder()
+                        .serviceName(newSub.getServiceName())
+                        .changeType("NEW")
+                        .newAmount(newSub.getMonthlyAmount())
+                        .newStatus(newSub.getStatus().getKorean())
+                        .build());
+            }
+        }
+
+        // 제거된 구독
+        for (var oldSub : older.getSubscriptions()) {
+            if (!newSubs.containsKey(oldSub.getServiceName())) {
+                result.removedSubscriptions.add(SubscriptionDiff.builder()
+                        .serviceName(oldSub.getServiceName())
+                        .changeType("REMOVED")
+                        .oldAmount(oldSub.getMonthlyAmount())
+                        .oldStatus(oldSub.getStatus().getKorean())
+                        .build());
+            }
+        }
+
+        // 변경된 구독
+        for (var newSub : newer.getSubscriptions()) {
+            var oldSub = oldSubs.get(newSub.getServiceName());
+            if (oldSub != null) {
+                boolean changed = false;
+                SubscriptionDiff.SubscriptionDiffBuilder diff = SubscriptionDiff.builder()
+                        .serviceName(newSub.getServiceName());
+
+                if (oldSub.getMonthlyAmount().compareTo(newSub.getMonthlyAmount()) != 0) {
+                    diff.oldAmount(oldSub.getMonthlyAmount())
+                            .newAmount(newSub.getMonthlyAmount());
+                    changed = true;
+                }
+
+                if (oldSub.getStatus() != newSub.getStatus()) {
+                    diff.oldStatus(oldSub.getStatus().getKorean())
+                            .newStatus(newSub.getStatus().getKorean());
+                    changed = true;
+                }
+
+                if (changed) {
+                    diff.changeType("CHANGED");
+                    result.changedSubscriptions.add(diff.build());
+                }
+            }
+        }
+    }
+
+    /**
+     * 비교 결과 요약 생성
+     */
+    public String generateSummary() {
+        StringBuilder summary = new StringBuilder();
+        summary.append("\n").append("=".repeat(60)).append("\n");
+        summary.append("                 분석 비교 결과\n");
+        summary.append("=".repeat(60)).append("\n\n");
+
+        summary.append(String.format("📅 비교 기간: %s → %s\n\n",
+                oldAnalysisDate.toLocalDate(), newAnalysisDate.toLocalDate()));
+
+        summary.append("📊 전체 통계:\n");
+        summary.append(String.format("  구독 개수: %d → %d (%+d)\n",
+                oldSubscriptionCount, newSubscriptionCount, subscriptionCountDiff));
+        summary.append(String.format("  월 지출: ₩%,.0f → ₩%,.0f (%+,.0f, %.1f%%)\n",
+                oldMonthlyTotal, newMonthlyTotal, monthlyTotalDiff, monthlyTotalChangePercent));
+        summary.append(String.format("  연간 예상: ₩%,.0f → ₩%,.0f (%+,.0f)\n\n",
+                oldAnnualProjection, newAnnualProjection, annualProjectionDiff));
+
+        if (!newSubscriptions.isEmpty()) {
+            summary.append("✨ 신규 구독 (").append(newSubscriptions.size()).append("개):\n");
+            for (var sub : newSubscriptions) {
+                summary.append(String.format("  + %s: ₩%,.0f/월\n",
+                        sub.serviceName, sub.newAmount));
+            }
+            summary.append("\n");
+        }
+
+        if (!removedSubscriptions.isEmpty()) {
+            summary.append("❌ 제거된 구독 (").append(removedSubscriptions.size()).append("개):\n");
+            for (var sub : removedSubscriptions) {
+                summary.append(String.format("  - %s: ₩%,.0f/월\n",
+                        sub.serviceName, sub.oldAmount));
+            }
+            summary.append("\n");
+        }
+
+        if (!changedSubscriptions.isEmpty()) {
+            summary.append("🔄 변경된 구독 (").append(changedSubscriptions.size()).append("개):\n");
+            for (var sub : changedSubscriptions) {
+                if (sub.oldAmount != null && sub.newAmount != null) {
+                    summary.append(String.format("  • %s: ₩%,.0f → ₩%,.0f\n",
+                            sub.serviceName, sub.oldAmount, sub.newAmount));
+                }
+                if (sub.oldStatus != null && sub.newStatus != null) {
+                    summary.append(String.format("    상태: %s → %s\n",
+                            sub.oldStatus, sub.newStatus));
+                }
+            }
+        }
+
+        summary.append("=".repeat(60)).append("\n");
+        return summary.toString();
+    }
+}

@@ -41,7 +41,7 @@
             <version>1.4.8</version>
         </dependency>
         
-        <!-- Lombok (보일러플레이트 코드 제거) -->
+        <!-- Lombok -->
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
@@ -70,6 +70,20 @@
             <artifactId>gson</artifactId>
             <version>2.10.1</version>
         </dependency>
+        
+        <!-- H2 데이터베이스 -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <version>2.2.224</version>
+        </dependency>
+        
+        <!-- HikariCP (커넥션 풀) -->
+        <dependency>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+            <version>5.0.1</version>
+        </dependency>
     </dependencies>
     
     <build>
@@ -84,7 +98,6 @@
                 </configuration>
             </plugin>
             
-            <!-- 실행 가능한 JAR 생성 -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-assembly-plugin</artifactId>
