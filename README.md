@@ -27,7 +27,6 @@
 
 - Java 17 이상
 - Maven 3.6 이상
-- VSCode (또는 IntelliJ IDEA)
 
 ### 설치 및 실행
 
@@ -53,9 +52,10 @@ mvn clean install
 run-web.bat
 
 # Mac/Linux
+chmod +x run-web.sh
 ./run-web.sh
 
-# 또는 직접 실행
+# 또는 Maven으로 직접 실행
 mvn exec:java -Dexec.mainClass="com.subtracker.SubscriptionTrackerApplication"
 # 메뉴에서 1번 선택
 ```
@@ -90,6 +90,8 @@ mvn exec:java -Dexec.mainClass="com.subtracker.SubscriptionTrackerApplication"
 2024-01-10,스포티파이,9900,엔터테인먼트,프리미엄,1234****5678
 ```
 
+**샘플 파일**: `src/main/resources/sample-data/sample_transactions.csv`
+
 ### 2. 웹 인터페이스 사용
 
 1. 브라우저에서 http://localhost:8080 접속
@@ -98,11 +100,20 @@ mvn exec:java -Dexec.mainClass="com.subtracker.SubscriptionTrackerApplication"
 4. **분석 이력** 탭에서 과거 분석 조회
 5. **변화 추적** 탭에서 구독 변화 확인
 
-### 3. 이력 비교하기
+### 3. API 사용
 
 ```bash
-# API로 두 분석 이력 비교
-GET http://localhost:8080/api/compare/{id1}/{id2}
+# 분석 이력 조회
+curl http://localhost:8080/api/history?limit=10
+
+# 특정 이력 조회
+curl http://localhost:8080/api/history/{id}
+
+# 두 이력 비교
+curl http://localhost:8080/api/compare/{id1}/{id2}
+
+# 변화 이력 조회
+curl http://localhost:8080/api/changes?limit=20
 ```
 
 ## 🏗️ 프로젝트 구조
@@ -118,26 +129,26 @@ subscription-tracker/
 │   │   │   ├── Transaction.java            # 거래 내역
 │   │   │   ├── Subscription.java           # 구독 정보
 │   │   │   ├── SubscriptionSummary.java    # 요약 정보
-│   │   │   ├── AnalysisHistory.java        # 분석 이력 (NEW)
-│   │   │   └── SubscriptionChange.java     # 변화 추적 (NEW)
+│   │   │   ├── AnalysisHistory.java        # 분석 이력
+│   │   │   └── SubscriptionChange.java     # 변화 추적
 │   │   └── service/
 │   │       ├── CsvParser.java              # CSV 파싱
 │   │       └── SubscriptionDetector.java   # 구독 감지
 │   ├── infrastructure/
 │   │   ├── database/
-│   │   │   └── DatabaseManager.java        # DB 연결 관리 (NEW)
+│   │   │   └── DatabaseManager.java        # DB 연결 관리
 │   │   └── repository/
-│   │       ├── AnalysisHistoryRepository.java      # 이력 저장소 (NEW)
-│   │       ├── SubscriptionRepository.java         # 구독 저장소 (NEW)
-│   │       └── SubscriptionChangeRepository.java   # 변화 저장소 (NEW)
+│   │       ├── AnalysisHistoryRepository.java
+│   │       ├── SubscriptionRepository.java
+│   │       └── SubscriptionChangeRepository.java
 │   ├── presentation/
 │   │   ├── ConsoleInterface.java           # 콘솔 UI
-│   │   ├── WebServerEnhanced.java          # 웹 서버 (NEW)
-│   │   ├── LocalDateAdapter.java           # JSON 변환
-│   │   └── LocalDateTimeAdapter.java       # JSON 변환 (NEW)
-│   └── SubscriptionTrackerApplication.java # 메인 클래스
-├── data/                                    # H2 데이터베이스 파일 (자동 생성)
-└── pom.xml                                  # Maven 설정
+│   │   ├── WebServerEnhanced.java          # 웹 서버
+│   │   ├── LocalDateAdapter.java
+│   │   └── LocalDateTimeAdapter.java
+│   └── SubscriptionTrackerApplication.java
+├── data/                                    # H2 데이터베이스 (자동 생성)
+└── pom.xml
 ```
 
 ## 🔧 구독 감지 알고리즘
@@ -213,22 +224,49 @@ subscription-tracker/
 
 - `GET /api/download-report/:id` - 보고서 다운로드
 
-## 🎨 다음 단계
+## 🧪 테스트
 
-### ✅ 완료된 기능
+```bash
+# 전체 테스트 실행
+mvn test
 
-- [x] 핵심 기능 (CSV 파싱, 구독 감지, 분석)
-- [x] 웹 인터페이스
-- [x] **데이터 영속성 (H2 데이터베이스)**
-- [x] **분석 이력 저장**
-- [x] **변화 추적**
-- [x] **이력 비교**
+# 특정 테스트 실행
+mvn test -Dtest=SubscriptionDetectorTest
+```
 
-### 🚧 진행 예정
+## 🚧 문제 해결
 
-- [ ] Option B: 시각화 개선 (Chart.js 그래프)
-- [ ] Option C: 스마트 기능 (카테고리 분류, 절약 추천)
-- [ ] Option D: CSV 포맷 확장 (다양한 은행 지원)
+### 포트 충돌
+
+```bash
+# 8080 포트가 이미 사용 중인 경우
+# WebServerEnhanced.java에서 포트 변경
+port(9090);  // 8080 → 9090
+```
+
+### 데이터베이스 파일 손상
+
+```bash
+# data 폴더 삭제 후 재실행
+rm -rf data/
+mvn exec:java
+```
+
+### Lombok 컴파일 오류
+
+```bash
+# IDE에 Lombok 플러그인 설치 필요
+# IntelliJ: Preferences → Plugins → Lombok 검색
+# VSCode: Extensions → Lombok Annotations Support
+```
+
+## 📈 향후 계획
+
+- [ ] 시각화 개선 (Chart.js 그래프)
+- [ ] 스마트 기능 (카테고리 분류, 절약 추천)
+- [ ] CSV 포맷 확장 (다양한 은행 지원)
+- [ ] 알림 기능 (결제 예정일 리마인더)
+- [ ] 모바일 앱 버전
 
 ## 📄 라이선스
 
@@ -244,10 +282,11 @@ MIT License
 
 ---
 
-**v1.1 업데이트 내용:**
+**v1.1 업데이트 내용 (2024):**
 
 - ✨ H2 데이터베이스 연동으로 영구 저장
 - 📊 분석 이력 관리 기능
 - 🔄 구독 변화 자동 추적
 - 📈 이력 비교 분석
-- 🌐 웹 인터페이스 개선 (이력 탭 추가)
+- 🌐 웹 인터페이스 개선
+- 🐛 버그 수정 및 성능 개선

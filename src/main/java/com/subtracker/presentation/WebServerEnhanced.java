@@ -31,7 +31,7 @@ public class WebServerEnhanced {
     private final SubscriptionManager subscriptionManager;
     private final Gson gson;
 
-    public WebServer() {
+    public WebServerEnhanced() {
         // 데이터베이스 초기화
         DatabaseManager.initialize();
 
@@ -61,6 +61,14 @@ public class WebServerEnhanced {
 
         log.info("웹 서버 시작: http://localhost:8080");
         System.out.println("\n🌐 웹 브라우저에서 접속하세요: http://localhost:8080\n");
+    }
+
+    /**
+     * 서버 종료
+     */
+    public void stop() {
+        spark.Spark.stop();
+        DatabaseManager.shutdown();
     }
 
     /**
@@ -212,7 +220,7 @@ public class WebServerEnhanced {
 
             res.type("text/plain");
             res.header("Content-Disposition",
-                    "attachment; filename=subscription_report.txt");
+                    "attachment; filename=subscription_report_" + id + ".txt");
 
             return report;
         });
@@ -228,7 +236,7 @@ public class WebServerEnhanced {
                 <head>
                     <meta charset="UTF-8">
                     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                    <title>구독 서비스 관리 도우미</title>
+                    <title>구독 서비스 관리 도우미 v1.1</title>
                     <style>
                         * {
                             margin: 0;
@@ -237,7 +245,7 @@ public class WebServerEnhanced {
                         }
 
                         body {
-                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                             min-height: 100vh;
                             padding: 20px;
@@ -298,12 +306,12 @@ public class WebServerEnhanced {
                             display: block;
                         }
 
-                        .upload-section {
+                        .card {
                             background: white;
                             border-radius: 15px;
                             padding: 30px;
                             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
-                            margin-bottom: 30px;
+                            margin-bottom: 20px;
                         }
 
                         .upload-area {
@@ -329,18 +337,13 @@ public class WebServerEnhanced {
                             display: none;
                         }
 
-                        .checkbox-group {
-                            margin: 20px 0;
-                            text-align: center;
-                        }
-
                         .btn {
                             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                             color: white;
                             border: none;
-                            padding: 12px 30px;
+                            padding: 12px 24px;
                             border-radius: 25px;
-                            font-size: 16px;
+                            font-size: 14px;
                             cursor: pointer;
                             transition: transform 0.2s;
                             margin: 5px;
@@ -350,20 +353,8 @@ public class WebServerEnhanced {
                             transform: translateY(-2px);
                         }
 
-                        .btn-secondary {
-                            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-                        }
-
                         .btn-danger {
                             background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);
-                        }
-
-                        .summary-card {
-                            background: white;
-                            border-radius: 15px;
-                            padding: 25px;
-                            margin-bottom: 20px;
-                            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
                         }
 
                         .stat-grid {
@@ -391,40 +382,20 @@ public class WebServerEnhanced {
                             margin-top: 5px;
                         }
 
-                        .history-list {
-                            background: white;
-                            border-radius: 15px;
-                            padding: 25px;
-                            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
-                        }
-
-                        .history-item {
+                        .list-item {
                             display: flex;
                             justify-content: space-between;
                             align-items: center;
                             padding: 15px;
                             border-bottom: 1px solid #eee;
-                            cursor: pointer;
                             transition: background 0.2s;
                         }
 
-                        .history-item:hover {
+                        .list-item:hover {
                             background: #f8f9fa;
                         }
 
-                        .history-item:last-child {
-                            border-bottom: none;
-                        }
-
-                        .subscription-item {
-                            display: flex;
-                            justify-content: space-between;
-                            align-items: center;
-                            padding: 15px;
-                            border-bottom: 1px solid #eee;
-                        }
-
-                        .subscription-item:last-child {
+                        .list-item:last-child {
                             border-bottom: none;
                         }
 
@@ -460,32 +431,13 @@ public class WebServerEnhanced {
                             0% { transform: rotate(0deg); }
                             100% { transform: rotate(360deg); }
                         }
-
-                        .change-item {
-                            padding: 12px;
-                            border-left: 3px solid #667eea;
-                            margin-bottom: 10px;
-                            background: #f8f9ff;
-                            border-radius: 5px;
-                        }
-
-                        .change-type {
-                            font-weight: bold;
-                            color: #667eea;
-                            margin-bottom: 5px;
-                        }
-
-                        .change-date {
-                            font-size: 0.9em;
-                            color: #999;
-                        }
                     </style>
                 </head>
                 <body>
                     <div class="container">
                         <header>
                             <h1>📊 구독 서비스 관리 도우미</h1>
-                            <p>구독 분석 및 이력 추적 시스템</p>
+                            <p>구독 분석 및 이력 추적 시스템 v1.1</p>
                         </header>
 
                         <div class="tabs">
@@ -496,17 +448,17 @@ public class WebServerEnhanced {
 
                         <!-- 새 분석 탭 -->
                         <div id="analyze-tab" class="tab-content active">
-                            <div class="upload-section">
+                            <div class="card">
                                 <div class="upload-area" id="uploadArea">
                                     <div class="upload-icon">📁</div>
                                     <h3>CSV 파일을 드래그하거나 클릭하여 업로드</h3>
                                     <p style="margin-top: 10px; color: #999;">
-                                        은행/카드사에서 다운받은 거래내역 CSV 파일
+                                        은행/카드사 거래내역 CSV 파일
                                     </p>
                                 </div>
                                 <input type="file" id="fileInput" class="file-input" accept=".csv">
 
-                                <div class="checkbox-group">
+                                <div style="margin: 20px 0; text-align: center;">
                                     <label>
                                         <input type="checkbox" id="hasHeader" checked>
                                         첫 줄이 헤더입니다
@@ -515,22 +467,20 @@ public class WebServerEnhanced {
 
                                 <div class="loading" id="loading">
                                     <div class="spinner"></div>
-                                    <p style="margin-top: 10px;">분석 중입니다...</p>
+                                    <p style="margin-top: 10px;">분석 중...</p>
                                 </div>
                             </div>
 
                             <div id="resultsSection" style="display: none;">
-                                <div class="summary-card">
+                                <div class="card">
                                     <h2>📈 구독 현황 요약</h2>
                                     <div class="stat-grid" id="statsGrid"></div>
                                     <div style="text-align: center; margin-top: 20px;">
-                                        <button class="btn" onclick="downloadReport()">
-                                            📥 보고서 다운로드
-                                        </button>
+                                        <button class="btn" onclick="downloadReport()">📥 보고서 다운로드</button>
                                     </div>
                                 </div>
 
-                                <div class="summary-card">
+                                <div class="card">
                                     <h2>💳 구독 서비스 목록</h2>
                                     <div id="subscriptionList"></div>
                                 </div>
@@ -539,7 +489,7 @@ public class WebServerEnhanced {
 
                         <!-- 분석 이력 탭 -->
                         <div id="history-tab" class="tab-content">
-                            <div class="history-list">
+                            <div class="card">
                                 <h2>📜 분석 이력</h2>
                                 <div id="historyList"></div>
                             </div>
@@ -547,7 +497,7 @@ public class WebServerEnhanced {
 
                         <!-- 변화 추적 탭 -->
                         <div id="changes-tab" class="tab-content">
-                            <div class="summary-card">
+                            <div class="card">
                                 <h2>🔄 구독 변화 이력</h2>
                                 <div id="changesList"></div>
                             </div>
@@ -557,7 +507,6 @@ public class WebServerEnhanced {
                     <script>
                         let currentHistoryId = null;
 
-                        // 탭 전환
                         function showTab(tabName) {
                             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
                             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -565,14 +514,10 @@ public class WebServerEnhanced {
                             event.target.classList.add('active');
                             document.getElementById(tabName + '-tab').classList.add('active');
 
-                            if (tabName === 'history') {
-                                loadHistory();
-                            } else if (tabName === 'changes') {
-                                loadChanges();
-                            }
+                            if (tabName === 'history') loadHistory();
+                            else if (tabName === 'changes') loadChanges();
                         }
 
-                        // 파일 업로드
                         const uploadArea = document.getElementById('uploadArea');
                         const fileInput = document.getElementById('fileInput');
 
@@ -589,9 +534,8 @@ public class WebServerEnhanced {
                         uploadArea.addEventListener('drop', (e) => {
                             e.preventDefault();
                             const file = e.dataTransfer.files[0];
-                            if (file && file.name.endsWith('.csv')) {
-                                uploadFile(file);
-                            }
+                            if (file?.name.endsWith('.csv')) uploadFile(file);
+                            else alert('CSV 파일만 업로드 가능합니다.');
                         });
 
                         async function uploadFile(file) {
@@ -625,10 +569,8 @@ public class WebServerEnhanced {
 
                         function displayResults(data) {
                             const summary = data.summary;
-                            const subscriptions = data.subscriptions;
 
-                            const statsGrid = document.getElementById('statsGrid');
-                            statsGrid.innerHTML = `
+                            document.getElementById('statsGrid').innerHTML = `
                                 <div class="stat-card">
                                     <div class="stat-value">${data.transactionCount}</div>
                                     <div class="stat-label">총 거래 건수</div>
@@ -647,13 +589,12 @@ public class WebServerEnhanced {
                                 </div>
                             `;
 
-                            const subscriptionList = document.getElementById('subscriptionList');
-                            subscriptionList.innerHTML = subscriptions.map(sub => `
-                                <div class="subscription-item">
+                            document.getElementById('subscriptionList').innerHTML = data.subscriptions.map(sub => `
+                                <div class="list-item">
                                     <div>
                                         <div style="font-weight: 600; font-size: 1.1em;">${sub.serviceName}</div>
                                         <small style="color: #999;">
-                                            ${sub.billingCycle.korean} · 총 ${sub.transactionCount}회 결제
+                                            ${sub.billingCycle.korean} · ${sub.transactionCount}회 결제
                                         </small>
                                     </div>
                                     <div style="display: flex; gap: 20px; align-items: center;">
@@ -668,15 +609,13 @@ public class WebServerEnhanced {
                             document.getElementById('resultsSection').style.display = 'block';
                         }
 
-                        // 분석 이력 로드
                         async function loadHistory() {
                             try {
                                 const response = await fetch('/api/history?limit=20');
                                 const histories = await response.json();
 
-                                const historyList = document.getElementById('historyList');
-                                historyList.innerHTML = histories.map(h => `
-                                    <div class="history-item" onclick="viewHistory('${h.id}')">
+                                document.getElementById('historyList').innerHTML = histories.map(h => `
+                                    <div class="list-item">
                                         <div>
                                             <div style="font-weight: 600;">${h.fileName || '분석 결과'}</div>
                                             <small style="color: #999;">
@@ -684,7 +623,9 @@ public class WebServerEnhanced {
                                                 ${h.subscriptionCount}개 구독 · ₩${h.monthlyTotal.toLocaleString()}/월
                                             </small>
                                         </div>
-                                        <button class="btn btn-danger" onclick="deleteHistory('${h.id}', event)">삭제</button>
+                                        <button class="btn btn-danger" onclick="deleteHistory('${h.id}', event)">
+                                            삭제
+                                        </button>
                                     </div>
                                 `).join('');
                             } catch (error) {
@@ -692,29 +633,26 @@ public class WebServerEnhanced {
                             }
                         }
 
-                        // 변화 이력 로드
                         async function loadChanges() {
                             try {
                                 const response = await fetch('/api/changes?limit=30');
                                 const changes = await response.json();
 
-                                const changesList = document.getElementById('changesList');
-                                changesList.innerHTML = changes.map(c => `
-                                    <div class="change-item">
-                                        <div class="change-type">${c.changeType.korean}</div>
+                                document.getElementById('changesList').innerHTML = changes.map(c => `
+                                    <div style="padding: 12px; border-left: 3px solid #667eea; margin-bottom: 10px; background: #f8f9ff; border-radius: 5px;">
+                                        <div style="font-weight: bold; color: #667eea; margin-bottom: 5px;">
+                                            ${c.changeType.korean}
+                                        </div>
                                         <div>${c.notes}</div>
                                         ${c.oldValue && c.newValue ? `<div>${c.oldValue} → ${c.newValue}</div>` : ''}
-                                        <div class="change-date">${new Date(c.changeDate).toLocaleString('ko-KR')}</div>
+                                        <div style="font-size: 0.9em; color: #999; margin-top: 5px;">
+                                            ${new Date(c.changeDate).toLocaleString('ko-KR')}
+                                        </div>
                                     </div>
                                 `).join('');
                             } catch (error) {
                                 console.error('변화 이력 로드 실패:', error);
                             }
-                        }
-
-                        function viewHistory(id) {
-                            // 상세 보기 구현
-                            alert('분석 이력 상세 보기: ' + id);
                         }
 
                         async function deleteHistory(id, event) {

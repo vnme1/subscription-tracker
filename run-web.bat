@@ -1,6 +1,7 @@
 @echo off
+chcp 65001 >nul
 echo ========================================
-echo    구독 서비스 관리 도우미 v1.0
+echo    구독 서비스 관리 도우미 v1.1
 echo ========================================
 echo.
 
@@ -21,6 +22,6 @@ echo.
 :: 웹 서버 실행
 echo [2/2] 웹 서버 시작 중...
 echo.
-echo 1 | mvn exec:java -Dexec.mainClass="com.subtracker.SubscriptionTrackerApplication" -q
+echo 1 | mvn exec:java -Dexec.mainClass="com.subtracker.SubscriptionTrackerApplication"
 
 pause
