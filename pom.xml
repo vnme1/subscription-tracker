@@ -98,6 +98,16 @@
                 </configuration>
             </plugin>
             
+            <!-- 🆕 exec-maven-plugin 추가 -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.6.2</version>
+                <configuration>
+                    <mainClass>com.subtracker.SubscriptionTrackerApplication</mainClass>
+                </configuration>
+            </plugin>
+            
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-assembly-plugin</artifactId>
