@@ -3,21 +3,21 @@ package com.subtracker.application;
 import com.subtracker.domain.model.*;
 import com.subtracker.domain.service.CsvParser;
 import com.subtracker.domain.service.SubscriptionDetector;
+import com.subtracker.infrastructure.database.DatabaseManager;
 import com.subtracker.infrastructure.repository.AnalysisHistoryRepository;
 import com.subtracker.infrastructure.repository.SubscriptionChangeRepository;
 import com.subtracker.infrastructure.repository.SubscriptionRepository;
 import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigDecimal;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * 구독 관리 비즈니스 로직 (개선 버전)
- * - 명확한 책임 분리
- * - 간결한 코드
- * - 견고한 에러 처리
+ * 구독 관리 비즈니스 로직 (트랜잭션 관리 개선)
  */
 @Slf4j
 public class SubscriptionManager {
@@ -39,7 +39,7 @@ public class SubscriptionManager {
     }
 
     /**
-     * CSV 파일 분석 및 저장
+     * CSV 파일 분석 및 저장 (트랜잭션 관리)
      */
     public AnalysisHistory analyzeAndSave(String filePath, String fileName, boolean hasHeader) {
         validateInput(filePath, fileName);
@@ -55,16 +55,14 @@ public class SubscriptionManager {
             List<Subscription> subscriptions = detector.detectSubscriptions(transactions);
             log.info("{}개의 구독 서비스 감지", subscriptions.size());
 
-            // 3. 분석 이력 생성 및 저장
+            // 3. 분석 이력 생성
             SubscriptionSummary summary = SubscriptionSummary.from(subscriptions);
             AnalysisHistory history = AnalysisHistory.fromSummary(summary, fileName, transactions.size());
 
-            historyRepository.save(history);
+            // 4. 트랜잭션 내에서 저장 및 변화 추적
+            saveWithTransaction(history, subscriptions);
+
             log.info("분석 이력 저장 완료: {}", history.getId());
-
-            // 4. 변화 추적
-            trackChanges(subscriptions);
-
             return history;
 
         } catch (Exception e) {
@@ -74,9 +72,49 @@ public class SubscriptionManager {
     }
 
     /**
-     * 구독 변화 추적
+     * 트랜잭션 내에서 이력 저장 및 변화 추적
      */
-    private void trackChanges(List<Subscription> currentSubscriptions) {
+    private void saveWithTransaction(AnalysisHistory history, List<Subscription> subscriptions) {
+        Connection conn = null;
+        try {
+            conn = DatabaseManager.getConnection();
+            conn.setAutoCommit(false);
+
+            // 1. 분석 이력 저장
+            historyRepository.save(history);
+
+            // 2. 변화 추적
+            trackChangesInTransaction(subscriptions);
+
+            conn.commit();
+            log.debug("트랜잭션 커밋 완료: {}", history.getId());
+
+        } catch (Exception e) {
+            if (conn != null) {
+                try {
+                    conn.rollback();
+                    log.warn("트랜잭션 롤백 완료");
+                } catch (SQLException ex) {
+                    log.error("롤백 실패", ex);
+                }
+            }
+            throw new RuntimeException("데이터 저장 실패", e);
+        } finally {
+            if (conn != null) {
+                try {
+                    conn.setAutoCommit(true);
+                    conn.close();
+                } catch (SQLException e) {
+                    log.error("연결 종료 실패", e);
+                }
+            }
+        }
+    }
+
+    /**
+     * 구독 변화 추적 (트랜잭션 내)
+     */
+    private void trackChangesInTransaction(List<Subscription> currentSubscriptions) {
         try {
             List<AnalysisHistory> recentHistories = historyRepository.findRecent(2);
 
@@ -93,7 +131,7 @@ public class SubscriptionManager {
 
         } catch (Exception e) {
             log.error("변화 추적 실패", e);
-            // 변화 추적 실패는 전체 프로세스를 중단시키지 않음
+            throw new RuntimeException("변화 추적 실패", e); // 트랜잭션 롤백을 위해 예외 전파
         }
     }
 
@@ -155,26 +193,21 @@ public class SubscriptionManager {
     }
 
     /**
-     * 변화 기록
+     * 변화 기록 (예외 전파)
      */
     private void recordChange(Subscription subscription, SubscriptionChange.ChangeType type,
             String oldValue, String newValue, String notes) {
-        try {
-            SubscriptionChange change = SubscriptionChange.builder()
-                    .subscriptionId(subscription.getSubscriptionId())
-                    .changeType(type)
-                    .oldValue(oldValue)
-                    .newValue(newValue)
-                    .changeDate(java.time.LocalDateTime.now())
-                    .notes(notes)
-                    .build();
+        SubscriptionChange change = SubscriptionChange.builder()
+                .subscriptionId(subscription.getSubscriptionId())
+                .changeType(type)
+                .oldValue(oldValue)
+                .newValue(newValue)
+                .changeDate(java.time.LocalDateTime.now())
+                .notes(notes)
+                .build();
 
-            changeRepository.save(change);
-            log.debug("변화 기록: {} - {}", subscription.getServiceName(), type);
-
-        } catch (Exception e) {
-            log.error("변화 기록 실패: {}", subscription.getServiceName(), e);
-        }
+        changeRepository.save(change);
+        log.debug("변화 기록: {} - {}", subscription.getServiceName(), type);
     }
 
     /**

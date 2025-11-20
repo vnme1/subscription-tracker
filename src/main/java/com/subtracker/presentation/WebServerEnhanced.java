@@ -4,26 +4,27 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.subtracker.application.ComparisonResult;
 import com.subtracker.application.SubscriptionManager;
+import com.subtracker.config.AppConfig;
 import com.subtracker.domain.model.*;
 import com.subtracker.infrastructure.database.DatabaseManager;
+import com.subtracker.presentation.dto.ApiResponse;
 import lombok.extern.slf4j.Slf4j;
 
 import javax.servlet.MultipartConfigElement;
 import javax.servlet.http.Part;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 import static spark.Spark.*;
 
 /**
- * 웹 인터페이스 서버 (향상된 UI/UX)
+ * 웹 인터페이스 서버 (동적 로고 및 색상 지원)
  */
 @Slf4j
 public class WebServerEnhanced {
@@ -31,8 +32,10 @@ public class WebServerEnhanced {
     private final SubscriptionManager subscriptionManager;
     private final Gson gson;
 
-    private static final int SERVER_PORT = 8080;
-    private static final String TEMP_UPLOAD_DIR = "/temp";
+    private static final long MAX_FILE_SIZE = AppConfig.getUploadMaxSize();
+    private static final Set<String> ALLOWED_EXTENSIONS = new HashSet<>(
+            Arrays.asList(AppConfig.getUploadAllowedExtensions()));
+    private static final String TEMP_UPLOAD_DIR = AppConfig.getUploadTempDir();
 
     public WebServerEnhanced() {
         DatabaseManager.initialize();
@@ -49,15 +52,15 @@ public class WebServerEnhanced {
     }
 
     public void start() {
-        port(SERVER_PORT);
+        port(AppConfig.getServerPort());
         staticFiles.location("/public");
         staticFiles.expireTime(600);
 
         configureCors();
         setupRoutes();
 
-        log.info("웹 서버 시작: http://localhost:{}", SERVER_PORT);
-        System.out.println("\n🌐 웹 브라우저에서 접속하세요: http://localhost:" + SERVER_PORT + "\n");
+        log.info("웹 서버 시작: http://localhost:{}", AppConfig.getServerPort());
+        System.out.println("\n🌐 웹 브라우저에서 접속하세요: http://localhost:" + AppConfig.getServerPort() + "\n");
     }
 
     private void configureCors() {
@@ -114,7 +117,7 @@ public class WebServerEnhanced {
             res.type("application/json; charset=utf-8");
             String serviceName = req.params("serviceName");
             List<Subscription> history = subscriptionManager.getSubscriptionHistory(serviceName);
-            return gson.toJson(history);
+            return gson.toJson(ApiResponse.success(history));
         });
 
         // 변화 이력
@@ -139,128 +142,216 @@ public class WebServerEnhanced {
             log.error("서버 오류 발생", e);
             res.status(500);
             res.type("application/json; charset=utf-8");
-            res.body(gson.toJson(Map.of(
-                    "success", false,
-                    "error", "서버 오류가 발생했습니다: " + e.getMessage())));
+            res.body(gson.toJson(ApiResponse.error("서버 오류가 발생했습니다")));
         });
     }
 
+    /**
+     * 파일 업로드 검증
+     */
+    private void validateUploadedFile(Part filePart) throws IOException {
+        // 1. 파일 크기 검증
+        if (filePart.getSize() > MAX_FILE_SIZE) {
+            throw new IllegalArgumentException(
+                    String.format("파일 크기가 너무 큽니다 (최대: %dMB)", MAX_FILE_SIZE / 1024 / 1024));
+        }
+
+        if (filePart.getSize() == 0) {
+            throw new IllegalArgumentException("빈 파일은 업로드할 수 없습니다");
+        }
+
+        // 2. 파일명 검증
+        String fileName = filePart.getSubmittedFileName();
+        if (fileName == null || fileName.isBlank()) {
+            throw new IllegalArgumentException("파일 이름이 없습니다");
+        }
+
+        // 3. 확장자 검증
+        String lowerFileName = fileName.toLowerCase();
+        boolean hasValidExtension = ALLOWED_EXTENSIONS.stream()
+                .anyMatch(ext -> lowerFileName.endsWith("." + ext.toLowerCase()));
+
+        if (!hasValidExtension) {
+            throw new IllegalArgumentException(
+                    "CSV 파일만 업로드 가능합니다 (허용: " + String.join(", ", ALLOWED_EXTENSIONS) + ")");
+        }
+
+        // 4. MIME 타입 검증 (경고만)
+        String contentType = filePart.getContentType();
+        if (contentType != null &&
+                !contentType.contains("text/csv") &&
+                !contentType.contains("application/csv") &&
+                !contentType.contains("text/plain") &&
+                !contentType.contains("application/vnd.ms-excel")) {
+            log.warn("예상치 못한 Content-Type: {} (파일: {})", contentType, fileName);
+        }
+
+        log.info("파일 검증 완료: {} ({}bytes)", fileName, filePart.getSize());
+    }
+
+    /**
+     * 파일 업로드 처리 (검증 강화)
+     */
     private String handleFileUpload(spark.Request req) {
+        Path tempFile = null;
         try {
             req.attribute("org.eclipse.jetty.multipartConfig",
                     new MultipartConfigElement(TEMP_UPLOAD_DIR));
 
             Part filePart = req.raw().getPart("file");
+
+            // 파일 검증
+            validateUploadedFile(filePart);
+
             boolean hasHeader = Boolean.parseBoolean(req.queryParams("hasHeader"));
 
             String fileName = filePart.getSubmittedFileName();
-            Path tempFile = Files.createTempFile("upload-", ".csv");
+            tempFile = Files.createTempFile("upload-", ".csv");
 
             try (InputStream input = filePart.getInputStream()) {
                 Files.copy(input, tempFile, StandardCopyOption.REPLACE_EXISTING);
             }
 
+            // 분석 실행
             AnalysisHistory history = subscriptionManager.analyzeAndSave(
                     tempFile.toString(), fileName, hasHeader);
 
             SubscriptionSummary summary = SubscriptionSummary.from(history.getSubscriptions());
 
             Map<String, Object> result = new HashMap<>();
-            result.put("success", true);
             result.put("historyId", history.getId());
             result.put("summary", summary);
             result.put("subscriptions", history.getSubscriptions());
             result.put("transactionCount", history.getTransactionCount());
 
-            Files.deleteIfExists(tempFile);
+            return gson.toJson(ApiResponse.success(result, "분석이 완료되었습니다"));
 
-            return gson.toJson(result);
-
+        } catch (IllegalArgumentException e) {
+            log.warn("파일 검증 실패: {}", e.getMessage());
+            return gson.toJson(ApiResponse.error(e.getMessage()));
         } catch (Exception e) {
             log.error("파일 분석 중 오류", e);
-            return gson.toJson(Map.of(
-                    "success", false,
-                    "error", e.getMessage()));
+            return gson.toJson(ApiResponse.error("파일 처리 중 오류가 발생했습니다: " + e.getMessage()));
+        } finally {
+            // 임시 파일 정리
+            if (tempFile != null) {
+                try {
+                    Files.deleteIfExists(tempFile);
+                } catch (IOException e) {
+                    log.warn("임시 파일 삭제 실패: {}", tempFile, e);
+                }
+            }
         }
     }
 
     private String handleGetHistory(spark.Request req) {
-        String limitParam = req.queryParams("limit");
-        int limit = limitParam != null ? Integer.parseInt(limitParam) : 10;
-        List<AnalysisHistory> histories = subscriptionManager.getRecentHistory(limit);
-        return gson.toJson(histories);
+        try {
+            String limitParam = req.queryParams("limit");
+            int limit = limitParam != null ? Integer.parseInt(limitParam) : 10;
+            List<AnalysisHistory> histories = subscriptionManager.getRecentHistory(limit);
+            return gson.toJson(ApiResponse.success(histories));
+        } catch (IllegalArgumentException e) {
+            return gson.toJson(ApiResponse.error(e.getMessage()));
+        } catch (Exception e) {
+            log.error("이력 조회 실패", e);
+            return gson.toJson(ApiResponse.error("이력 조회 중 오류가 발생했습니다"));
+        }
     }
 
     private String handleGetHistoryById(spark.Request req, spark.Response res) {
-        String id = req.params("id");
-        AnalysisHistory history = subscriptionManager.getHistoryById(id);
+        try {
+            String id = req.params("id");
+            AnalysisHistory history = subscriptionManager.getHistoryById(id);
 
-        if (history == null) {
-            res.status(404);
-            return gson.toJson(Map.of("error", "분석 이력을 찾을 수 없습니다"));
+            if (history == null) {
+                res.status(404);
+                return gson.toJson(ApiResponse.error("분석 이력을 찾을 수 없습니다"));
+            }
+
+            return gson.toJson(ApiResponse.success(history));
+        } catch (Exception e) {
+            log.error("이력 조회 실패", e);
+            res.status(500);
+            return gson.toJson(ApiResponse.error("이력 조회 중 오류가 발생했습니다"));
         }
-
-        return gson.toJson(history);
     }
 
     private String handleCompareHistory(spark.Request req, spark.Response res) {
-        String id1 = req.params("id1");
-        String id2 = req.params("id2");
+        try {
+            String id1 = req.params("id1");
+            String id2 = req.params("id2");
 
-        ComparisonResult comparison = subscriptionManager.compareHistory(id1, id2);
+            ComparisonResult comparison = subscriptionManager.compareHistory(id1, id2);
 
-        if (comparison == null) {
-            res.status(404);
-            return gson.toJson(Map.of("error", "비교할 분석 이력을 찾을 수 없습니다"));
+            if (comparison == null) {
+                res.status(404);
+                return gson.toJson(ApiResponse.error("비교할 분석 이력을 찾을 수 없습니다"));
+            }
+
+            return gson.toJson(ApiResponse.success(comparison));
+        } catch (Exception e) {
+            log.error("이력 비교 실패", e);
+            res.status(500);
+            return gson.toJson(ApiResponse.error("이력 비교 중 오류가 발생했습니다"));
         }
-
-        return gson.toJson(comparison);
     }
 
     private String handleGetChanges(spark.Request req) {
-        String limitParam = req.queryParams("limit");
-        int limit = limitParam != null ? Integer.parseInt(limitParam) : 20;
-        List<SubscriptionChange> changes = subscriptionManager.getRecentChanges(limit);
-        return gson.toJson(changes);
+        try {
+            String limitParam = req.queryParams("limit");
+            int limit = limitParam != null ? Integer.parseInt(limitParam) : 20;
+            List<SubscriptionChange> changes = subscriptionManager.getRecentChanges(limit);
+            return gson.toJson(ApiResponse.success(changes));
+        } catch (IllegalArgumentException e) {
+            return gson.toJson(ApiResponse.error(e.getMessage()));
+        } catch (Exception e) {
+            log.error("변화 이력 조회 실패", e);
+            return gson.toJson(ApiResponse.error("변화 이력 조회 중 오류가 발생했습니다"));
+        }
     }
 
     private String handleDeleteHistory(spark.Request req, spark.Response res) {
-        String id = req.params("id");
-
         try {
+            String id = req.params("id");
             subscriptionManager.deleteHistory(id);
-            return gson.toJson(Map.of(
-                    "success", true,
-                    "message", "삭제되었습니다"));
+            return gson.toJson(ApiResponse.success(null, "삭제되었습니다"));
+        } catch (IllegalArgumentException e) {
+            res.status(400);
+            return gson.toJson(ApiResponse.error(e.getMessage()));
         } catch (Exception e) {
+            log.error("이력 삭제 실패", e);
             res.status(500);
-            return gson.toJson(Map.of(
-                    "success", false,
-                    "error", e.getMessage()));
+            return gson.toJson(ApiResponse.error("이력 삭제 중 오류가 발생했습니다"));
         }
     }
 
     private String handleDownloadReport(spark.Request req, spark.Response res) {
-        String id = req.params("id");
-        AnalysisHistory history = subscriptionManager.getHistoryById(id);
+        try {
+            String id = req.params("id");
+            AnalysisHistory history = subscriptionManager.getHistoryById(id);
 
-        if (history == null) {
-            res.status(404);
-            return "분석 이력을 찾을 수 없습니다";
+            if (history == null) {
+                res.status(404);
+                return "분석 이력을 찾을 수 없습니다";
+            }
+
+            SubscriptionSummary summary = SubscriptionSummary.from(history.getSubscriptions());
+            String report = summary.generateReport();
+
+            res.type("text/plain; charset=utf-8");
+            res.header("Content-Disposition",
+                    "attachment; filename=subscription_report_" + id + ".txt");
+
+            return report;
+        } catch (Exception e) {
+            log.error("보고서 다운로드 실패", e);
+            res.status(500);
+            return "보고서 생성 중 오류가 발생했습니다";
         }
-
-        SubscriptionSummary summary = SubscriptionSummary.from(history.getSubscriptions());
-        String report = summary.generateReport();
-
-        res.type("text/plain; charset=utf-8");
-        res.header("Content-Disposition",
-                "attachment; filename=subscription_report_" + id + ".txt");
-
-        return report;
     }
 
     /**
-     * 향상된 메인 HTML 페이지 (test.html 디자인 적용)
+     * 메인 HTML 페이지 (동적 로고 및 색상 지원)
      */
     private String getIndexHtml() {
         return """
@@ -310,7 +401,7 @@ public class WebServerEnhanced {
                         <div id="content-upload">
                             <!-- 파일 업로드 섹션 -->
                             <section class="glass-panel rounded-2xl p-8 text-center transition hover:border-indigo-300 border-dashed border-2 border-gray-300 group upload-area" id="uploadArea">
-                                <input type="file" id="fileInput" class="hidden" accept=".csv">
+                                <input type="file" id="fileInput" class="hidden" accept=".csv,.CSV">
                                 <div class="space-y-3">
                                     <div class="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mx-auto group-hover:scale-110 transition">
                                         <i class="fas fa-file-csv text-xl"></i>
@@ -347,21 +438,8 @@ public class WebServerEnhanced {
                                             <i class="fas fa-download mr-1"></i> 보고서 다운로드
                                         </button>
                                     </div>
-                                    <div class="overflow-x-auto">
-                                        <table class="w-full text-left border-collapse">
-                                            <thead>
-                                                <tr class="text-xs text-gray-500 bg-gray-50 border-b border-gray-100">
-                                                    <th class="px-6 py-3 font-medium">서비스명</th>
-                                                    <th class="px-6 py-3 font-medium">주기</th>
-                                                    <th class="px-6 py-3 font-medium">금액</th>
-                                                    <th class="px-6 py-3 font-medium">다음 결제일</th>
-                                                    <th class="px-6 py-3 font-medium">상태</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody id="subscriptionTableBody" class="text-sm">
-                                                <!-- 동적으로 생성 -->
-                                            </tbody>
-                                        </table>
+                                    <div id="subscriptionList" class="p-6 space-y-3">
+                                        <!-- 동적으로 생성 -->
                                     </div>
                                     <div class="bg-gray-50 px-6 py-3 border-t border-gray-100 text-right">
                                         <span class="text-xs text-gray-500">최근 업데이트: <span id="lastUpdate"></span></span>
@@ -395,9 +473,81 @@ public class WebServerEnhanced {
                     <script>
                         let currentHistoryId = null;
 
+                        // Enum 한국어 매핑
+                        const billingCycleMap = {
+                            'MONTHLY': '월간',
+                            'QUARTERLY': '분기',
+                            'SEMI_ANNUAL': '반기',
+                            'ANNUAL': '연간',
+                            'UNKNOWN': '미확인'
+                        };
+
+                        const statusMap = {
+                            'ACTIVE': '활성',
+                            'INACTIVE': '비활성',
+                            'PENDING': '대기중',
+                            'CANCELLED': '취소됨'
+                        };
+
+                        // 동적 색상 생성 (문자열 해시 기반)
+                        function getColorFromString(str) {
+                            let hash = 0;
+                            for (let i = 0; i < str.length; i++) {
+                                hash = str.charCodeAt(i) + ((hash << 5) - hash);
+                            }
+                            const colors = [
+                                'bg-red-600', 'bg-blue-600', 'bg-green-600',
+                                'bg-purple-600', 'bg-pink-600', 'bg-indigo-600',
+                                'bg-yellow-600', 'bg-teal-600', 'bg-orange-600',
+                                'bg-rose-600', 'bg-cyan-600', 'bg-lime-600',
+                                'bg-fuchsia-600', 'bg-violet-600', 'bg-sky-600'
+                            ];
+                            return colors[Math.abs(hash) % colors.length];
+                        }
+
+                        // 로고 URL 가져오기
+                        function getLogoUrl(serviceName) {
+                            const domainMap = {
+                                '넷플릭스': 'netflix.com',
+                                'netflix': 'netflix.com',
+                                '스포티파이': 'spotify.com',
+                                'spotify': 'spotify.com',
+                                '유튜브': 'youtube.com',
+                                'youtube': 'youtube.com',
+                                '쿠팡': 'coupang.com',
+                                'coupang': 'coupang.com',
+                                '네이버': 'naver.com',
+                                'naver': 'naver.com',
+                                'apple': 'apple.com',
+                                'google': 'google.com',
+                                'microsoft': 'microsoft.com',
+                                'amazon': 'amazon.com',
+                                'disney': 'disneyplus.com',
+                                '디즈니': 'disneyplus.com',
+                                'wavve': 'wavve.com',
+                                '웨이브': 'wavve.com',
+                                'tving': 'tving.com',
+                                '티빙': 'tving.com',
+                                'watcha': 'watcha.com',
+                                '왓챠': 'watcha.com',
+                                'adobe': 'adobe.com',
+                                'dropbox': 'dropbox.com',
+                                'notion': 'notion.so',
+                                '노션': 'notion.so'
+                            };
+
+                            const lowerName = serviceName.toLowerCase();
+                            for (const [key, domain] of Object.entries(domainMap)) {
+                                if (lowerName.includes(key)) {
+                                    return `https://logo.clearbit.com/${domain}`;
+                                }
+                            }
+
+                            return null;
+                        }
+
                         // 탭 전환
                         function showTab(tabName) {
-                            // 모든 탭 비활성화
                             ['upload', 'history', 'changes'].forEach(tab => {
                                 document.getElementById('content-' + tab).classList.add('hidden');
                                 const tabBtn = document.getElementById('tab-' + tab);
@@ -405,13 +555,11 @@ public class WebServerEnhanced {
                                 tabBtn.classList.add('text-gray-500');
                             });
 
-                            // 선택된 탭 활성화
                             document.getElementById('content-' + tabName).classList.remove('hidden');
                             const activeTab = document.getElementById('tab-' + tabName);
                             activeTab.classList.remove('text-gray-500');
                             activeTab.classList.add('text-indigo-600', 'border-b-2', 'border-indigo-600');
 
-                            // 데이터 로드
                             if (tabName === 'history') loadHistory();
                             else if (tabName === 'changes') loadChanges();
                         }
@@ -439,7 +587,7 @@ public class WebServerEnhanced {
                             e.preventDefault();
                             uploadArea.classList.remove('dragging');
                             const file = e.dataTransfer.files[0];
-                            if (file?.name.endsWith('.csv')) uploadFile(file);
+                            if (file?.name.toLowerCase().endsWith('.csv')) uploadFile(file);
                             else alert('CSV 파일만 업로드 가능합니다.');
                         });
 
@@ -458,13 +606,13 @@ public class WebServerEnhanced {
                                     body: formData
                                 });
 
-                                const data = await response.json();
+                                const apiResponse = await response.json();
 
-                                if (data.success) {
-                                    currentHistoryId = data.historyId;
-                                    displayResults(data);
+                                if (apiResponse.success) {
+                                    currentHistoryId = apiResponse.data.historyId;
+                                    displayResults(apiResponse.data);
                                 } else {
-                                    alert('분석 실패: ' + data.error);
+                                    alert('분석 실패: ' + apiResponse.error);
                                 }
                             } catch (error) {
                                 alert('오류 발생: ' + error.message);
@@ -509,51 +657,58 @@ public class WebServerEnhanced {
                             `;
                             document.getElementById('statsCards').innerHTML = statsHtml;
 
-                            // 구독 테이블
-                            const tableHtml = subscriptions.map(sub => {
+                            // 구독 카드 리스트
+                            const listHtml = subscriptions.map(sub => {
+                                const brandColor = getColorFromString(sub.serviceName);
+                                const logoUrl = getLogoUrl(sub.serviceName);
+
                                 const statusColors = {
                                     'ACTIVE': 'bg-green-100 text-green-700',
                                     'INACTIVE': 'bg-gray-100 text-gray-600',
                                     'PENDING': 'bg-yellow-100 text-yellow-700'
                                 };
-                                const cycleColors = {
-                                    'MONTHLY': 'bg-gray-100 text-gray-600',
-                                    'QUARTERLY': 'bg-indigo-100 text-indigo-700',
-                                    'ANNUAL': 'bg-purple-100 text-purple-700'
-                                };
+
+                                const billingCycleKorean = billingCycleMap[sub.billingCycle] || sub.billingCycle;
+                                const statusKorean = statusMap[sub.status] || sub.status;
 
                                 return `
-                                    <tr class="group hover:bg-gray-50 transition">
-                                        <td class="px-6 py-4">
-                                            <div class="flex items-center gap-3">
-                                                <div class="w-8 h-8 rounded bg-indigo-500 text-white flex items-center justify-center font-bold text-xs">
-                                                    ${sub.serviceName.charAt(0).toUpperCase()}
-                                                </div>
-                                                <span class="font-semibold text-gray-900">${sub.serviceName}</span>
+                                    <div class="glass-panel rounded-xl p-4 hover:shadow-md transition flex items-center justify-between">
+                                        <div class="flex items-center gap-4 flex-1">
+                                            <div class="w-12 h-12 rounded-xl ${brandColor} text-white flex items-center justify-center font-bold text-lg shadow-sm overflow-hidden relative">
+                                                ${logoUrl ?
+                                                    `<img src="${logoUrl}"
+                                                          alt="${sub.serviceName}"
+                                                          class="w-full h-full object-cover absolute inset-0"
+                                                          onerror="this.style.display='none';">
+                                                     <span class="relative z-10">${sub.serviceName.charAt(0).toUpperCase()}</span>`
+                                                    :
+                                                    sub.serviceName.charAt(0).toUpperCase()
+                                                }
                                             </div>
-                                        </td>
-                                        <td class="px-6 py-4">
-                                            <span class="${cycleColors[sub.billingCycle] || 'bg-gray-100 text-gray-600'} px-2 py-1 rounded text-xs">
-                                                ${sub.billingCycle.korean}
+                                            <div class="flex-1">
+                                                <div class="font-bold text-gray-900 text-lg">${sub.serviceName}</div>
+                                                <div class="text-sm text-gray-500 mt-1">
+                                                    <span class="inline-flex items-center gap-1">
+                                                        <span class="px-2 py-0.5 bg-gray-100 rounded text-xs">${billingCycleKorean}</span>
+                                                        ${sub.nextChargeDate ?
+                                                            `<span class="text-indigo-600">• ${formatNextPayment(sub.nextChargeDate)}</span>`
+                                                            : ''}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="text-right">
+                                            <div class="text-2xl font-bold text-gray-900">₩${sub.monthlyAmount.toLocaleString()}</div>
+                                            <span class="${statusColors[sub.status] || 'bg-gray-100 text-gray-600'} px-2 py-1 rounded-full text-xs mt-1 inline-block">
+                                                ${statusKorean}
                                             </span>
-                                        </td>
-                                        <td class="px-6 py-4 text-gray-900">₩ ${sub.monthlyAmount.toLocaleString()}</td>
-                                        <td class="px-6 py-4 text-indigo-600 font-medium">
-                                            ${sub.nextChargeDate ? formatNextPayment(sub.nextChargeDate) : '-'}
-                                        </td>
-                                        <td class="px-6 py-4">
-                                            <span class="${statusColors[sub.status] || 'bg-gray-100 text-gray-600'} px-2 py-1 rounded text-xs">
-                                                ${sub.status.korean}
-                                            </span>
-                                        </td>
-                                    </tr>
+                                        </div>
+                                    </div>
                                 `;
                             }).join('');
-                            document.getElementById('subscriptionTableBody').innerHTML = tableHtml;
+                            document.getElementById('subscriptionList').innerHTML = listHtml;
 
-                            // 업데이트 시간
                             document.getElementById('lastUpdate').textContent = new Date().toLocaleString('ko-KR');
-
                             document.getElementById('resultsSection').classList.remove('hidden');
                         }
 
@@ -567,11 +722,16 @@ public class WebServerEnhanced {
                             return `${date.getMonth() + 1}월 ${date.getDate()}일 (D-${diffDays})`;
                         }
 
-                        // 분석 이력 로드
                         async function loadHistory() {
                             try {
                                 const response = await fetch('/api/history?limit=20');
-                                const histories = await response.json();
+                                const apiResponse = await response.json();
+
+                                if (!apiResponse.success) {
+                                    throw new Error(apiResponse.error);
+                                }
+
+                                const histories = apiResponse.data;
 
                                 const historyHtml = histories.map(h => `
                                     <div class="glass-panel rounded-lg p-4 flex justify-between items-center hover:shadow-md transition">
@@ -593,29 +753,39 @@ public class WebServerEnhanced {
                                     '<div class="text-center text-gray-500 py-8">분석 이력이 없습니다</div>';
                             } catch (error) {
                                 console.error('이력 로드 실패:', error);
+                                document.getElementById('historyList').innerHTML =
+                                    '<div class="text-center text-red-500 py-8">이력을 불러오는데 실패했습니다</div>';
                             }
                         }
 
-                        // 변화 이력 로드
                         async function loadChanges() {
                             try {
                                 const response = await fetch('/api/changes?limit=30');
-                                const changes = await response.json();
+                                const apiResponse = await response.json();
 
-                                const changeTypeIcons = {
-                                    'CREATED': '✨',
-                                    'AMOUNT_CHANGED': '💰',
-                                    'STATUS_CHANGED': '🔄',
-                                    'CYCLE_CHANGED': '📅',
-                                    'CANCELLED': '❌'
+                                if (!apiResponse.success) {
+                                    throw new Error(apiResponse.error);
+                                }
+
+                                const changes = apiResponse.data;
+
+                                const changeTypeMap = {
+                                    'CREATED': { icon: '✨', text: '신규 구독' },
+                                    'AMOUNT_CHANGED': { icon: '💰', text: '금액 변경' },
+                                    'STATUS_CHANGED': { icon: '🔄', text: '상태 변경' },
+                                    'CYCLE_CHANGED': { icon: '📅', text: '주기 변경' },
+                                    'CANCELLED': { icon: '❌', text: '구독 취소' }
                                 };
 
-                                const changesHtml = changes.map(c => `
+                                const changesHtml = changes.map(c => {
+                                    const changeInfo = changeTypeMap[c.changeType] || { icon: '📝', text: c.changeType };
+
+                                    return `
                                     <div class="glass-panel rounded-lg p-4 border-l-4 border-l-indigo-500">
                                         <div class="flex items-start justify-between">
                                             <div class="flex-1">
                                                 <div class="font-semibold text-gray-900 mb-1">
-                                                    ${changeTypeIcons[c.changeType] || '📝'} ${c.changeType.korean}
+                                                    ${changeInfo.icon} ${changeInfo.text}
                                                 </div>
                                                 <div class="text-sm text-gray-600">${c.notes}</div>
                                                 ${c.oldValue && c.newValue ?
@@ -627,29 +797,35 @@ public class WebServerEnhanced {
                                             </div>
                                         </div>
                                     </div>
-                                `).join('');
+                                `}).join('');
 
                                 document.getElementById('changesList').innerHTML = changesHtml ||
                                     '<div class="text-center text-gray-500 py-8">변화 이력이 없습니다</div>';
                             } catch (error) {
                                 console.error('변화 이력 로드 실패:', error);
+                                document.getElementById('changesList').innerHTML =
+                                    '<div class="text-center text-red-500 py-8">변화 이력을 불러오는데 실패했습니다</div>';
                             }
                         }
 
-                        // 이력 삭제
                         async function deleteHistory(id, event) {
                             event.stopPropagation();
                             if (!confirm('정말 삭제하시겠습니까?')) return;
 
                             try {
-                                await fetch(`/api/history/${id}`, { method: 'DELETE' });
-                                loadHistory();
+                                const response = await fetch(`/api/history/${id}`, { method: 'DELETE' });
+                                const apiResponse = await response.json();
+
+                                if (apiResponse.success) {
+                                    loadHistory();
+                                } else {
+                                    alert('삭제 실패: ' + apiResponse.error);
+                                }
                             } catch (error) {
                                 alert('삭제 실패: ' + error.message);
                             }
                         }
 
-                        // 보고서 다운로드
                         function downloadReport() {
                             if (currentHistoryId) {
                                 window.location.href = `/api/download-report/${currentHistoryId}`;

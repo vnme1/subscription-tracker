@@ -1,5 +1,6 @@
 package com.subtracker.infrastructure.database;
 
+import com.subtracker.config.AppConfig;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import lombok.extern.slf4j.Slf4j;
@@ -9,20 +10,11 @@ import java.sql.SQLException;
 import java.sql.Statement;
 
 /**
- * 데이터베이스 연결 관리자 (수정 버전)
- * - 무한 재귀 제거
- * - 명확한 초기화 순서
- * - 안전한 연결 관리
+ * 데이터베이스 연결 관리자 (설정 외부화)
  */
 @Slf4j
 public class DatabaseManager {
 
-    private static final String DB_URL = "jdbc:h2:./data/subscriptions;AUTO_SERVER=TRUE;MODE=MySQL";
-    private static final String DB_USER = "sa";
-    private static final String DB_PASSWORD = "";
-
-    private static final int MAX_POOL_SIZE = 10;
-    private static final int MIN_IDLE = 2;
     private static final long CONNECTION_TIMEOUT = 30000;
     private static final long IDLE_TIMEOUT = 600000;
     private static final long MAX_LIFETIME = 1800000;
@@ -54,11 +46,12 @@ public class DatabaseManager {
                 // 2단계: 연결 테스트
                 testConnection();
 
-                // 3단계: 테이블 생성 (직접 연결 사용)
+                // 3단계: 테이블 생성
                 createTablesInternal();
 
                 initialized = true;
-                log.info("데이터베이스 초기화 완료 (Pool: {})", MAX_POOL_SIZE);
+                log.info("데이터베이스 초기화 완료 (Pool: {}, URL: {})",
+                        AppConfig.getDbPoolMax(), AppConfig.getDbUrl());
 
             } catch (Exception e) {
                 log.error("데이터베이스 초기화 실패", e);
@@ -71,17 +64,17 @@ public class DatabaseManager {
     }
 
     /**
-     * HikariCP 설정 생성
+     * HikariCP 설정 생성 (외부 설정 사용)
      */
     private static HikariConfig createHikariConfig() {
         HikariConfig config = new HikariConfig();
 
-        config.setJdbcUrl(DB_URL);
-        config.setUsername(DB_USER);
-        config.setPassword(DB_PASSWORD);
+        config.setJdbcUrl(AppConfig.getDbUrl());
+        config.setUsername(AppConfig.getDbUser());
+        config.setPassword(AppConfig.getDbPassword());
 
-        config.setMaximumPoolSize(MAX_POOL_SIZE);
-        config.setMinimumIdle(MIN_IDLE);
+        config.setMaximumPoolSize(AppConfig.getDbPoolMax());
+        config.setMinimumIdle(AppConfig.getDbPoolMin());
         config.setConnectionTimeout(CONNECTION_TIMEOUT);
         config.setIdleTimeout(IDLE_TIMEOUT);
         config.setMaxLifetime(MAX_LIFETIME);
@@ -90,9 +83,11 @@ public class DatabaseManager {
         config.setConnectionTestQuery("SELECT 1");
         config.setPoolName("SubTrackerPool");
 
+        // Performance tuning
         config.addDataSourceProperty("cachePrepStmts", "true");
         config.addDataSourceProperty("prepStmtCacheSize", "250");
         config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
+        config.addDataSourceProperty("useServerPrepStmts", "true");
 
         return config;
     }
@@ -110,7 +105,7 @@ public class DatabaseManager {
     }
 
     /**
-     * 테이블 생성 (내부 전용, getConnection 사용 안 함)
+     * 테이블 생성 (내부 전용)
      */
     private static void createTablesInternal() throws SQLException {
         try (Connection conn = dataSource.getConnection();
@@ -130,7 +125,8 @@ public class DatabaseManager {
                         )
                     """);
 
-            stmt.execute("CREATE INDEX IF NOT EXISTS idx_analysis_date ON analysis_history(analysis_date)");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_analysis_date ON analysis_history(analysis_date DESC)");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_created_at ON analysis_history(created_at DESC)");
 
             // 구독 이력 테이블
             stmt.execute("""
@@ -154,6 +150,7 @@ public class DatabaseManager {
 
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_service_name ON subscription_history(service_name)");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_analysis_id ON subscription_history(analysis_id)");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_sub_created_at ON subscription_history(created_at DESC)");
 
             // 구독 변화 추적 테이블
             stmt.execute("""
@@ -169,7 +166,8 @@ public class DatabaseManager {
                     """);
 
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_subscription_id ON subscription_changes(subscription_id)");
-            stmt.execute("CREATE INDEX IF NOT EXISTS idx_change_date ON subscription_changes(change_date)");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_change_date ON subscription_changes(change_date DESC)");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_change_type ON subscription_changes(change_type)");
 
             log.info("데이터베이스 테이블 생성 완료");
 
@@ -221,7 +219,7 @@ public class DatabaseManager {
         }
 
         return String.format(
-                "Active: %d, Idle: %d, Total: %d, Waiting: %d",
+                "Pool Stats - Active: %d, Idle: %d, Total: %d, Waiting: %d",
                 dataSource.getHikariPoolMXBean().getActiveConnections(),
                 dataSource.getHikariPoolMXBean().getIdleConnections(),
                 dataSource.getHikariPoolMXBean().getTotalConnections(),
@@ -233,9 +231,10 @@ public class DatabaseManager {
      */
     public static synchronized void shutdown() {
         if (dataSource != null && !dataSource.isClosed()) {
+            log.info("데이터베이스 연결 종료 중... ({})", getPoolStats());
             dataSource.close();
             initialized = false;
-            log.info("데이터베이스 연결 종료");
+            log.info("데이터베이스 연결 종료 완료");
         }
     }
 
