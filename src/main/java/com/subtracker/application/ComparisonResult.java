@@ -1,10 +1,7 @@
 package com.subtracker.application;
 
 import com.subtracker.domain.model.AnalysisHistory;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import lombok.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -13,18 +10,27 @@ import java.util.List;
 
 /**
  * 두 분석 결과 비교
+ * StackOverflow 방지
  */
-@Data
+@Getter
+@Setter
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+@ToString(exclude = { "newSubscriptions", "removedSubscriptions", "changedSubscriptions" })
+@EqualsAndHashCode(exclude = { "newSubscriptions", "removedSubscriptions", "changedSubscriptions" })
 public class ComparisonResult {
 
-    @Data
+    @Getter
+    @Setter
     @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @ToString
+    @EqualsAndHashCode
     public static class SubscriptionDiff {
         private String serviceName;
-        private String changeType; // NEW, REMOVED, CHANGED, UNCHANGED
+        private String changeType;
         private BigDecimal oldAmount;
         private BigDecimal newAmount;
         private String oldStatus;
@@ -84,7 +90,6 @@ public class ComparisonResult {
         result.newAnnualProjection = newer.getAnnualProjection();
         result.annualProjectionDiff = newer.getAnnualProjection().subtract(older.getAnnualProjection());
 
-        // 구독 변화 분석
         compareSubscriptions(older, newer, result);
 
         return result;

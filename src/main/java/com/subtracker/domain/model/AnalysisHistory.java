@@ -1,9 +1,6 @@
 package com.subtracker.domain.model;
 
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import lombok.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -12,11 +9,15 @@ import java.util.List;
 
 /**
  * 분석 이력을 나타내는 도메인 모델
+ * StackOverflow 방지: @ToString.Exclude, @EqualsAndHashCode.Exclude 적용
  */
-@Data
+@Getter
+@Setter
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+@ToString(exclude = "subscriptions") // ✅ subscriptions 제외
+@EqualsAndHashCode(exclude = "subscriptions") // ✅ subscriptions 제외
 public class AnalysisHistory {
 
     private String id;

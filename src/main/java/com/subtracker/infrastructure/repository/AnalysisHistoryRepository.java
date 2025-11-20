@@ -12,16 +12,10 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 분석 이력 데이터 접근 계층
+ * 분석 이력 데이터 접근 계층 (수정: 순환 참조 제거)
  */
 @Slf4j
 public class AnalysisHistoryRepository {
-
-    private final SubscriptionRepository subscriptionRepository;
-
-    public AnalysisHistoryRepository() {
-        this.subscriptionRepository = new SubscriptionRepository();
-    }
 
     /**
      * 분석 이력 저장
@@ -48,9 +42,11 @@ public class AnalysisHistoryRepository {
 
             pstmt.executeUpdate();
 
-            // 구독 정보도 함께 저장
+            // ✅ 구독 정보는 외부에서 저장하도록 변경
+            // 순환 참조 방지
+            SubscriptionRepository subscriptionRepo = new SubscriptionRepository();
             for (Subscription subscription : history.getSubscriptions()) {
-                subscriptionRepository.save(subscription, history.getId());
+                subscriptionRepo.save(subscription, history.getId());
             }
 
             log.info("분석 이력 저장 완료: {}", history.getId());
@@ -110,7 +106,8 @@ public class AnalysisHistoryRepository {
                 if (rs.next()) {
                     AnalysisHistory history = mapResultSet(rs);
                     // 관련 구독 정보 로드
-                    List<Subscription> subscriptions = subscriptionRepository.findByAnalysisId(id);
+                    SubscriptionRepository subscriptionRepo = new SubscriptionRepository();
+                    List<Subscription> subscriptions = subscriptionRepo.findByAnalysisId(id);
                     history.setSubscriptions(subscriptions);
                     return Optional.of(history);
                 }
@@ -146,7 +143,8 @@ public class AnalysisHistoryRepository {
                 while (rs.next()) {
                     AnalysisHistory history = mapResultSet(rs);
                     // 구독 정보도 함께 로드
-                    List<Subscription> subscriptions = subscriptionRepository.findByAnalysisId(history.getId());
+                    SubscriptionRepository subscriptionRepo = new SubscriptionRepository();
+                    List<Subscription> subscriptions = subscriptionRepo.findByAnalysisId(history.getId());
                     history.setSubscriptions(subscriptions);
                     histories.add(history);
                 }
@@ -202,8 +200,9 @@ public class AnalysisHistoryRepository {
         try (Connection conn = DatabaseManager.getConnection();
                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
-            // 구독 정보 먼저 삭제
-            subscriptionRepository.deleteByAnalysisId(id);
+            // 구독 정보 먼저 삭제 (CASCADE로 자동 삭제되지만 명시적으로)
+            SubscriptionRepository subscriptionRepo = new SubscriptionRepository();
+            subscriptionRepo.deleteByAnalysisId(id);
 
             pstmt.setString(1, id);
             pstmt.executeUpdate();
@@ -229,6 +228,7 @@ public class AnalysisHistoryRepository {
                 .monthlyTotal(rs.getBigDecimal("monthly_total"))
                 .annualProjection(rs.getBigDecimal("annual_projection"))
                 .createdAt(rs.getTimestamp("created_at").toLocalDateTime())
+                .subscriptions(new ArrayList<>()) // ✅ 빈 리스트로 초기화
                 .build();
     }
 }

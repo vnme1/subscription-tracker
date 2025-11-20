@@ -23,7 +23,7 @@ import java.util.Map;
 import static spark.Spark.*;
 
 /**
- * 웹 인터페이스 서버 (데이터 영속성 포함)
+ * 웹 인터페이스 서버 (향상된 UI/UX)
  */
 @Slf4j
 public class WebServerEnhanced {
@@ -31,203 +31,236 @@ public class WebServerEnhanced {
     private final SubscriptionManager subscriptionManager;
     private final Gson gson;
 
-    public WebServerEnhanced() {
-        // 데이터베이스 초기화
-        DatabaseManager.initialize();
+    private static final int SERVER_PORT = 8080;
+    private static final String TEMP_UPLOAD_DIR = "/temp";
 
+    public WebServerEnhanced() {
+        DatabaseManager.initialize();
         this.subscriptionManager = new SubscriptionManager();
-        this.gson = new GsonBuilder()
+        this.gson = createGsonInstance();
+    }
+
+    private Gson createGsonInstance() {
+        return new GsonBuilder()
                 .registerTypeAdapter(LocalDate.class, new LocalDateAdapter())
                 .registerTypeAdapter(LocalDateTime.class, new LocalDateTimeAdapter())
                 .setPrettyPrinting()
                 .create();
     }
 
-    /**
-     * 서버 시작
-     */
     public void start() {
-        port(8080);
+        port(SERVER_PORT);
         staticFiles.location("/public");
         staticFiles.expireTime(600);
 
+        configureCors();
+        setupRoutes();
+
+        log.info("웹 서버 시작: http://localhost:{}", SERVER_PORT);
+        System.out.println("\n🌐 웹 브라우저에서 접속하세요: http://localhost:" + SERVER_PORT + "\n");
+    }
+
+    private void configureCors() {
         before((req, res) -> {
             res.header("Access-Control-Allow-Origin", "*");
             res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
             res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
         });
 
-        setupRoutes();
-
-        log.info("웹 서버 시작: http://localhost:8080");
-        System.out.println("\n🌐 웹 브라우저에서 접속하세요: http://localhost:8080\n");
+        options("/*", (req, res) -> {
+            res.status(200);
+            return "OK";
+        });
     }
 
-    /**
-     * 서버 종료
-     */
     public void stop() {
         spark.Spark.stop();
         DatabaseManager.shutdown();
+        log.info("웹 서버 종료");
     }
 
-    /**
-     * API 라우트 설정
-     */
     private void setupRoutes() {
         // 메인 페이지
         get("/", (req, res) -> {
-            res.type("text/html");
+            res.type("text/html; charset=utf-8");
             return getIndexHtml();
         });
 
-        // CSV 파일 업로드 및 분석 (데이터 저장 포함)
+        // CSV 파일 업로드 및 분석
         post("/api/analyze", (req, res) -> {
-            res.type("application/json");
-
-            try {
-                req.attribute("org.eclipse.jetty.multipartConfig",
-                        new MultipartConfigElement("/temp"));
-
-                Part filePart = req.raw().getPart("file");
-                boolean hasHeader = Boolean.parseBoolean(req.queryParams("hasHeader"));
-
-                String fileName = filePart.getSubmittedFileName();
-                Path tempFile = Files.createTempFile("upload-", ".csv");
-
-                try (InputStream input = filePart.getInputStream()) {
-                    Files.copy(input, tempFile, StandardCopyOption.REPLACE_EXISTING);
-                }
-
-                // 분석 및 저장
-                AnalysisHistory history = subscriptionManager.analyzeAndSave(
-                        tempFile.toString(), fileName, hasHeader);
-
-                // 요약 정보 생성
-                SubscriptionSummary summary = SubscriptionSummary.from(history.getSubscriptions());
-
-                Map<String, Object> result = new HashMap<>();
-                result.put("success", true);
-                result.put("historyId", history.getId());
-                result.put("summary", summary);
-                result.put("subscriptions", history.getSubscriptions());
-                result.put("transactionCount", history.getTransactionCount());
-
-                Files.deleteIfExists(tempFile);
-
-                return gson.toJson(result);
-
-            } catch (Exception e) {
-                log.error("파일 분석 중 오류", e);
-                Map<String, Object> error = new HashMap<>();
-                error.put("success", false);
-                error.put("error", e.getMessage());
-                return gson.toJson(error);
-            }
+            res.type("application/json; charset=utf-8");
+            return handleFileUpload(req);
         });
 
-        // 분석 이력 목록 조회
+        // 분석 이력 API
         get("/api/history", (req, res) -> {
-            res.type("application/json");
-
-            String limitParam = req.queryParams("limit");
-            int limit = limitParam != null ? Integer.parseInt(limitParam) : 10;
-
-            List<AnalysisHistory> histories = subscriptionManager.getRecentHistory(limit);
-            return gson.toJson(histories);
+            res.type("application/json; charset=utf-8");
+            return handleGetHistory(req);
         });
 
-        // 특정 분석 이력 상세 조회
         get("/api/history/:id", (req, res) -> {
-            res.type("application/json");
-
-            String id = req.params("id");
-            AnalysisHistory history = subscriptionManager.getHistoryById(id);
-
-            if (history == null) {
-                res.status(404);
-                return gson.toJson(Map.of("error", "분석 이력을 찾을 수 없습니다"));
-            }
-
-            return gson.toJson(history);
+            res.type("application/json; charset=utf-8");
+            return handleGetHistoryById(req, res);
         });
 
-        // 두 분석 이력 비교
+        // 이력 비교
         get("/api/compare/:id1/:id2", (req, res) -> {
-            res.type("application/json");
-
-            String id1 = req.params("id1");
-            String id2 = req.params("id2");
-
-            ComparisonResult comparison = subscriptionManager.compareHistory(id1, id2);
-
-            if (comparison == null) {
-                res.status(404);
-                return gson.toJson(Map.of("error", "비교할 분석 이력을 찾을 수 없습니다"));
-            }
-
-            return gson.toJson(comparison);
+            res.type("application/json; charset=utf-8");
+            return handleCompareHistory(req, res);
         });
 
-        // 특정 서비스의 이력 조회
+        // 서비스별 이력
         get("/api/subscription-history/:serviceName", (req, res) -> {
-            res.type("application/json");
-
+            res.type("application/json; charset=utf-8");
             String serviceName = req.params("serviceName");
             List<Subscription> history = subscriptionManager.getSubscriptionHistory(serviceName);
-
             return gson.toJson(history);
         });
 
-        // 최근 변화 이력 조회
+        // 변화 이력
         get("/api/changes", (req, res) -> {
-            res.type("application/json");
-
-            String limitParam = req.queryParams("limit");
-            int limit = limitParam != null ? Integer.parseInt(limitParam) : 20;
-
-            List<SubscriptionChange> changes = subscriptionManager.getRecentChanges(limit);
-            return gson.toJson(changes);
+            res.type("application/json; charset=utf-8");
+            return handleGetChanges(req);
         });
 
-        // 분석 이력 삭제
+        // 이력 삭제
         delete("/api/history/:id", (req, res) -> {
-            res.type("application/json");
-
-            String id = req.params("id");
-
-            try {
-                subscriptionManager.deleteHistory(id);
-                return gson.toJson(Map.of("success", true, "message", "삭제되었습니다"));
-            } catch (Exception e) {
-                res.status(500);
-                return gson.toJson(Map.of("success", false, "error", e.getMessage()));
-            }
+            res.type("application/json; charset=utf-8");
+            return handleDeleteHistory(req, res);
         });
 
         // 보고서 다운로드
         get("/api/download-report/:id", (req, res) -> {
-            String id = req.params("id");
-            AnalysisHistory history = subscriptionManager.getHistoryById(id);
+            return handleDownloadReport(req, res);
+        });
 
-            if (history == null) {
-                res.status(404);
-                return "분석 이력을 찾을 수 없습니다";
-            }
-
-            SubscriptionSummary summary = SubscriptionSummary.from(history.getSubscriptions());
-            String report = summary.generateReport();
-
-            res.type("text/plain");
-            res.header("Content-Disposition",
-                    "attachment; filename=subscription_report_" + id + ".txt");
-
-            return report;
+        // 에러 핸들링
+        exception(Exception.class, (e, req, res) -> {
+            log.error("서버 오류 발생", e);
+            res.status(500);
+            res.type("application/json; charset=utf-8");
+            res.body(gson.toJson(Map.of(
+                    "success", false,
+                    "error", "서버 오류가 발생했습니다: " + e.getMessage())));
         });
     }
 
+    private String handleFileUpload(spark.Request req) {
+        try {
+            req.attribute("org.eclipse.jetty.multipartConfig",
+                    new MultipartConfigElement(TEMP_UPLOAD_DIR));
+
+            Part filePart = req.raw().getPart("file");
+            boolean hasHeader = Boolean.parseBoolean(req.queryParams("hasHeader"));
+
+            String fileName = filePart.getSubmittedFileName();
+            Path tempFile = Files.createTempFile("upload-", ".csv");
+
+            try (InputStream input = filePart.getInputStream()) {
+                Files.copy(input, tempFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+
+            AnalysisHistory history = subscriptionManager.analyzeAndSave(
+                    tempFile.toString(), fileName, hasHeader);
+
+            SubscriptionSummary summary = SubscriptionSummary.from(history.getSubscriptions());
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", true);
+            result.put("historyId", history.getId());
+            result.put("summary", summary);
+            result.put("subscriptions", history.getSubscriptions());
+            result.put("transactionCount", history.getTransactionCount());
+
+            Files.deleteIfExists(tempFile);
+
+            return gson.toJson(result);
+
+        } catch (Exception e) {
+            log.error("파일 분석 중 오류", e);
+            return gson.toJson(Map.of(
+                    "success", false,
+                    "error", e.getMessage()));
+        }
+    }
+
+    private String handleGetHistory(spark.Request req) {
+        String limitParam = req.queryParams("limit");
+        int limit = limitParam != null ? Integer.parseInt(limitParam) : 10;
+        List<AnalysisHistory> histories = subscriptionManager.getRecentHistory(limit);
+        return gson.toJson(histories);
+    }
+
+    private String handleGetHistoryById(spark.Request req, spark.Response res) {
+        String id = req.params("id");
+        AnalysisHistory history = subscriptionManager.getHistoryById(id);
+
+        if (history == null) {
+            res.status(404);
+            return gson.toJson(Map.of("error", "분석 이력을 찾을 수 없습니다"));
+        }
+
+        return gson.toJson(history);
+    }
+
+    private String handleCompareHistory(spark.Request req, spark.Response res) {
+        String id1 = req.params("id1");
+        String id2 = req.params("id2");
+
+        ComparisonResult comparison = subscriptionManager.compareHistory(id1, id2);
+
+        if (comparison == null) {
+            res.status(404);
+            return gson.toJson(Map.of("error", "비교할 분석 이력을 찾을 수 없습니다"));
+        }
+
+        return gson.toJson(comparison);
+    }
+
+    private String handleGetChanges(spark.Request req) {
+        String limitParam = req.queryParams("limit");
+        int limit = limitParam != null ? Integer.parseInt(limitParam) : 20;
+        List<SubscriptionChange> changes = subscriptionManager.getRecentChanges(limit);
+        return gson.toJson(changes);
+    }
+
+    private String handleDeleteHistory(spark.Request req, spark.Response res) {
+        String id = req.params("id");
+
+        try {
+            subscriptionManager.deleteHistory(id);
+            return gson.toJson(Map.of(
+                    "success", true,
+                    "message", "삭제되었습니다"));
+        } catch (Exception e) {
+            res.status(500);
+            return gson.toJson(Map.of(
+                    "success", false,
+                    "error", e.getMessage()));
+        }
+    }
+
+    private String handleDownloadReport(spark.Request req, spark.Response res) {
+        String id = req.params("id");
+        AnalysisHistory history = subscriptionManager.getHistoryById(id);
+
+        if (history == null) {
+            res.status(404);
+            return "분석 이력을 찾을 수 없습니다";
+        }
+
+        SubscriptionSummary summary = SubscriptionSummary.from(history.getSubscriptions());
+        String report = summary.generateReport();
+
+        res.type("text/plain; charset=utf-8");
+        res.header("Content-Disposition",
+                "attachment; filename=subscription_report_" + id + ".txt");
+
+        return report;
+    }
+
     /**
-     * 메인 HTML 페이지 (이력 관리 기능 추가)
+     * 향상된 메인 HTML 페이지 (test.html 디자인 적용)
      */
     private String getIndexHtml() {
         return """
@@ -236,315 +269,188 @@ public class WebServerEnhanced {
                 <head>
                     <meta charset="UTF-8">
                     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                    <title>구독 서비스 관리 도우미 v1.1</title>
+                    <title>SubTracker - 구독 관리</title>
+                    <script src="https://cdn.tailwindcss.com"></script>
+                    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
                     <style>
-                        * {
-                            margin: 0;
-                            padding: 0;
-                            box-sizing: border-box;
-                        }
-
-                        body {
-                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                            min-height: 100vh;
-                            padding: 20px;
-                        }
-
-                        .container {
-                            max-width: 1400px;
-                            margin: 0 auto;
-                        }
-
-                        header {
-                            text-align: center;
-                            color: white;
-                            margin-bottom: 30px;
-                        }
-
-                        header h1 {
-                            font-size: 2.5em;
-                            margin-bottom: 10px;
-                        }
-
-                        header p {
-                            font-size: 1.2em;
-                            opacity: 0.9;
-                        }
-
-                        .tabs {
-                            display: flex;
-                            gap: 10px;
-                            margin-bottom: 20px;
-                        }
-
-                        .tab {
-                            background: rgba(255, 255, 255, 0.2);
-                            color: white;
-                            border: none;
-                            padding: 12px 30px;
-                            border-radius: 10px;
-                            font-size: 16px;
-                            cursor: pointer;
-                            transition: all 0.3s;
-                        }
-
-                        .tab.active {
-                            background: white;
-                            color: #667eea;
-                        }
-
-                        .tab:hover {
-                            transform: translateY(-2px);
-                        }
-
-                        .tab-content {
-                            display: none;
-                        }
-
-                        .tab-content.active {
-                            display: block;
-                        }
-
-                        .card {
-                            background: white;
-                            border-radius: 15px;
-                            padding: 30px;
-                            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
-                            margin-bottom: 20px;
-                        }
-
-                        .upload-area {
-                            border: 3px dashed #ddd;
-                            border-radius: 10px;
-                            padding: 40px;
-                            text-align: center;
-                            transition: all 0.3s;
-                            cursor: pointer;
-                        }
-
-                        .upload-area:hover {
-                            border-color: #667eea;
-                            background: #f8f9ff;
-                        }
-
-                        .upload-icon {
-                            font-size: 48px;
-                            margin-bottom: 20px;
-                        }
-
-                        .file-input {
-                            display: none;
-                        }
-
-                        .btn {
-                            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                            color: white;
-                            border: none;
-                            padding: 12px 24px;
-                            border-radius: 25px;
-                            font-size: 14px;
-                            cursor: pointer;
-                            transition: transform 0.2s;
-                            margin: 5px;
-                        }
-
-                        .btn:hover {
-                            transform: translateY(-2px);
-                        }
-
-                        .btn-danger {
-                            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);
-                        }
-
-                        .stat-grid {
-                            display: grid;
-                            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                            gap: 20px;
-                            margin: 20px 0;
-                        }
-
-                        .stat-card {
-                            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-                            padding: 20px;
-                            border-radius: 10px;
-                            text-align: center;
-                        }
-
-                        .stat-value {
-                            font-size: 2em;
-                            font-weight: bold;
-                            color: #333;
-                        }
-
-                        .stat-label {
-                            color: #666;
-                            margin-top: 5px;
-                        }
-
-                        .list-item {
-                            display: flex;
-                            justify-content: space-between;
-                            align-items: center;
-                            padding: 15px;
-                            border-bottom: 1px solid #eee;
-                            transition: background 0.2s;
-                        }
-
-                        .list-item:hover {
-                            background: #f8f9fa;
-                        }
-
-                        .list-item:last-child {
-                            border-bottom: none;
-                        }
-
-                        .badge {
-                            padding: 4px 12px;
-                            border-radius: 15px;
-                            font-size: 0.9em;
-                            font-weight: 500;
-                        }
-
-                        .badge.active {
-                            background: #d4f4dd;
-                            color: #22c55e;
-                        }
-
-                        .loading {
-                            display: none;
-                            text-align: center;
-                            padding: 20px;
-                        }
-
-                        .spinner {
-                            border: 3px solid #f3f3f3;
-                            border-top: 3px solid #667eea;
-                            border-radius: 50%;
-                            width: 40px;
-                            height: 40px;
-                            animation: spin 1s linear infinite;
-                            margin: 0 auto;
-                        }
-
-                        @keyframes spin {
-                            0% { transform: rotate(0deg); }
-                            100% { transform: rotate(360deg); }
-                        }
+                        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+                        body { font-family: 'Inter', sans-serif; background-color: #F3F4F6; }
+                        .glass-panel { background: white; border: 1px solid #E5E7EB; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.02); }
+                        .upload-area { transition: all 0.3s; cursor: pointer; }
+                        .upload-area:hover { border-color: #667eea; background: #f0f2ff; }
+                        .upload-area.dragging { border-color: #4f46e5; background: #eef2ff; }
                     </style>
                 </head>
-                <body>
-                    <div class="container">
-                        <header>
-                            <h1>📊 구독 서비스 관리 도우미</h1>
-                            <p>구독 분석 및 이력 추적 시스템 v1.1</p>
-                        </header>
+                <body class="text-gray-800">
 
-                        <div class="tabs">
-                            <button class="tab active" onclick="showTab('analyze')">📁 새 분석</button>
-                            <button class="tab" onclick="showTab('history')">📜 분석 이력</button>
-                            <button class="tab" onclick="showTab('changes')">🔄 변화 추적</button>
-                        </div>
-
-                        <!-- 새 분석 탭 -->
-                        <div id="analyze-tab" class="tab-content active">
-                            <div class="card">
-                                <div class="upload-area" id="uploadArea">
-                                    <div class="upload-icon">📁</div>
-                                    <h3>CSV 파일을 드래그하거나 클릭하여 업로드</h3>
-                                    <p style="margin-top: 10px; color: #999;">
-                                        은행/카드사 거래내역 CSV 파일
-                                    </p>
-                                </div>
-                                <input type="file" id="fileInput" class="file-input" accept=".csv">
-
-                                <div style="margin: 20px 0; text-align: center;">
-                                    <label>
-                                        <input type="checkbox" id="hasHeader" checked>
-                                        첫 줄이 헤더입니다
-                                    </label>
-                                </div>
-
-                                <div class="loading" id="loading">
-                                    <div class="spinner"></div>
-                                    <p style="margin-top: 10px;">분석 중...</p>
-                                </div>
+                    <!-- 네비게이션 -->
+                    <nav class="bg-white border-b border-gray-200 sticky top-0 z-10">
+                        <div class="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
+                            <div class="flex items-center gap-2">
+                                <div class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold">S</div>
+                                <span class="text-xl font-bold tracking-tight text-gray-900">SubTracker</span>
                             </div>
+                            <div class="flex gap-4">
+                                <button onclick="showTab('upload')" id="tab-upload" class="text-sm text-indigo-600 hover:text-indigo-700 font-medium border-b-2 border-indigo-600 pb-1">
+                                    대시보드
+                                </button>
+                                <button onclick="showTab('history')" id="tab-history" class="text-sm text-gray-500 hover:text-indigo-600 font-medium pb-1">
+                                    분석 이력
+                                </button>
+                                <button onclick="showTab('changes')" id="tab-changes" class="text-sm text-gray-500 hover:text-indigo-600 font-medium pb-1">
+                                    변화 추적
+                                </button>
+                            </div>
+                        </div>
+                    </nav>
 
-                            <div id="resultsSection" style="display: none;">
-                                <div class="card">
-                                    <h2>📈 구독 현황 요약</h2>
-                                    <div class="stat-grid" id="statsGrid"></div>
-                                    <div style="text-align: center; margin-top: 20px;">
-                                        <button class="btn" onclick="downloadReport()">📥 보고서 다운로드</button>
+                    <main class="max-w-6xl mx-auto px-6 py-10 space-y-8">
+
+                        <!-- 업로드 탭 -->
+                        <div id="content-upload">
+                            <!-- 파일 업로드 섹션 -->
+                            <section class="glass-panel rounded-2xl p-8 text-center transition hover:border-indigo-300 border-dashed border-2 border-gray-300 group upload-area" id="uploadArea">
+                                <input type="file" id="fileInput" class="hidden" accept=".csv">
+                                <div class="space-y-3">
+                                    <div class="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mx-auto group-hover:scale-110 transition">
+                                        <i class="fas fa-file-csv text-xl"></i>
+                                    </div>
+                                    <h3 class="text-lg font-semibold text-gray-900">은행 거래내역(CSV) 업로드</h3>
+                                    <p class="text-sm text-gray-500">파일을 이곳에 드래그하거나 클릭하여 업로드하세요.<br>자동으로 구독 서비스를 감지합니다.</p>
+                                    <div class="mt-4">
+                                        <label class="inline-flex items-center">
+                                            <input type="checkbox" id="hasHeader" checked class="form-checkbox h-4 w-4 text-indigo-600">
+                                            <span class="ml-2 text-sm text-gray-600">첫 줄이 헤더입니다</span>
+                                        </label>
                                     </div>
                                 </div>
+                            </section>
 
-                                <div class="card">
-                                    <h2>💳 구독 서비스 목록</h2>
-                                    <div id="subscriptionList"></div>
-                                </div>
+                            <!-- 로딩 -->
+                            <div id="loading" class="hidden text-center py-8">
+                                <div class="inline-block animate-spin rounded-full h-12 w-12 border-4 border-indigo-500 border-t-transparent"></div>
+                                <p class="mt-4 text-gray-600">분석 중입니다...</p>
+                            </div>
+
+                            <!-- 결과 섹션 -->
+                            <div id="resultsSection" class="hidden space-y-6">
+                                <!-- 통계 카드 -->
+                                <section class="grid grid-cols-1 md:grid-cols-3 gap-6" id="statsCards">
+                                    <!-- 동적으로 생성 -->
+                                </section>
+
+                                <!-- 구독 목록 -->
+                                <section class="glass-panel rounded-2xl overflow-hidden">
+                                    <div class="px-6 py-5 border-b border-gray-100 flex justify-between items-center">
+                                        <h3 class="font-bold text-gray-800">활성 구독 내역</h3>
+                                        <button onclick="downloadReport()" class="text-xs bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-lg font-medium hover:bg-indigo-100 transition">
+                                            <i class="fas fa-download mr-1"></i> 보고서 다운로드
+                                        </button>
+                                    </div>
+                                    <div class="overflow-x-auto">
+                                        <table class="w-full text-left border-collapse">
+                                            <thead>
+                                                <tr class="text-xs text-gray-500 bg-gray-50 border-b border-gray-100">
+                                                    <th class="px-6 py-3 font-medium">서비스명</th>
+                                                    <th class="px-6 py-3 font-medium">주기</th>
+                                                    <th class="px-6 py-3 font-medium">금액</th>
+                                                    <th class="px-6 py-3 font-medium">다음 결제일</th>
+                                                    <th class="px-6 py-3 font-medium">상태</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="subscriptionTableBody" class="text-sm">
+                                                <!-- 동적으로 생성 -->
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div class="bg-gray-50 px-6 py-3 border-t border-gray-100 text-right">
+                                        <span class="text-xs text-gray-500">최근 업데이트: <span id="lastUpdate"></span></span>
+                                    </div>
+                                </section>
                             </div>
                         </div>
 
                         <!-- 분석 이력 탭 -->
-                        <div id="history-tab" class="tab-content">
-                            <div class="card">
-                                <h2>📜 분석 이력</h2>
-                                <div id="historyList"></div>
-                            </div>
+                        <div id="content-history" class="hidden">
+                            <section class="glass-panel rounded-2xl p-6">
+                                <h2 class="text-xl font-bold mb-4">📜 분석 이력</h2>
+                                <div id="historyList" class="space-y-3">
+                                    <!-- 동적으로 생성 -->
+                                </div>
+                            </section>
                         </div>
 
                         <!-- 변화 추적 탭 -->
-                        <div id="changes-tab" class="tab-content">
-                            <div class="card">
-                                <h2>🔄 구독 변화 이력</h2>
-                                <div id="changesList"></div>
-                            </div>
+                        <div id="content-changes" class="hidden">
+                            <section class="glass-panel rounded-2xl p-6">
+                                <h2 class="text-xl font-bold mb-4">🔄 구독 변화 이력</h2>
+                                <div id="changesList" class="space-y-3">
+                                    <!-- 동적으로 생성 -->
+                                </div>
+                            </section>
                         </div>
-                    </div>
+
+                    </main>
 
                     <script>
                         let currentHistoryId = null;
 
+                        // 탭 전환
                         function showTab(tabName) {
-                            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                            // 모든 탭 비활성화
+                            ['upload', 'history', 'changes'].forEach(tab => {
+                                document.getElementById('content-' + tab).classList.add('hidden');
+                                const tabBtn = document.getElementById('tab-' + tab);
+                                tabBtn.classList.remove('text-indigo-600', 'border-b-2', 'border-indigo-600');
+                                tabBtn.classList.add('text-gray-500');
+                            });
 
-                            event.target.classList.add('active');
-                            document.getElementById(tabName + '-tab').classList.add('active');
+                            // 선택된 탭 활성화
+                            document.getElementById('content-' + tabName).classList.remove('hidden');
+                            const activeTab = document.getElementById('tab-' + tabName);
+                            activeTab.classList.remove('text-gray-500');
+                            activeTab.classList.add('text-indigo-600', 'border-b-2', 'border-indigo-600');
 
+                            // 데이터 로드
                             if (tabName === 'history') loadHistory();
                             else if (tabName === 'changes') loadChanges();
                         }
 
+                        // 파일 업로드 이벤트
                         const uploadArea = document.getElementById('uploadArea');
                         const fileInput = document.getElementById('fileInput');
 
                         uploadArea.addEventListener('click', () => fileInput.click());
+
                         fileInput.addEventListener('change', (e) => {
                             if (e.target.files[0]) uploadFile(e.target.files[0]);
                         });
 
                         uploadArea.addEventListener('dragover', (e) => {
                             e.preventDefault();
-                            uploadArea.style.borderColor = '#667eea';
+                            uploadArea.classList.add('dragging');
+                        });
+
+                        uploadArea.addEventListener('dragleave', () => {
+                            uploadArea.classList.remove('dragging');
                         });
 
                         uploadArea.addEventListener('drop', (e) => {
                             e.preventDefault();
+                            uploadArea.classList.remove('dragging');
                             const file = e.dataTransfer.files[0];
                             if (file?.name.endsWith('.csv')) uploadFile(file);
                             else alert('CSV 파일만 업로드 가능합니다.');
                         });
 
+                        // 파일 업로드 및 분석
                         async function uploadFile(file) {
                             const formData = new FormData();
                             formData.append('file', file);
                             const hasHeader = document.getElementById('hasHeader').checked;
 
-                            document.getElementById('loading').style.display = 'block';
-                            document.getElementById('resultsSection').style.display = 'none';
+                            document.getElementById('loading').classList.remove('hidden');
+                            document.getElementById('resultsSection').classList.add('hidden');
 
                             try {
                                 const response = await fetch(`/api/analyze?hasHeader=${hasHeader}`, {
@@ -563,98 +469,174 @@ public class WebServerEnhanced {
                             } catch (error) {
                                 alert('오류 발생: ' + error.message);
                             } finally {
-                                document.getElementById('loading').style.display = 'none';
+                                document.getElementById('loading').classList.add('hidden');
                             }
                         }
 
+                        // 결과 표시
                         function displayResults(data) {
                             const summary = data.summary;
+                            const subscriptions = data.subscriptions;
 
-                            document.getElementById('statsGrid').innerHTML = `
-                                <div class="stat-card">
-                                    <div class="stat-value">${data.transactionCount}</div>
-                                    <div class="stat-label">총 거래 건수</div>
+                            // 통계 카드
+                            const statsHtml = `
+                                <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between">
+                                    <div class="text-gray-500 text-sm font-medium mb-2">이번 달 총 구독료</div>
+                                    <div class="text-3xl font-bold text-gray-900">₩ ${summary.monthlyTotal.toLocaleString()}</div>
+                                    <div class="mt-4 text-xs text-gray-400">총 ${summary.totalSubscriptions}개 구독</div>
                                 </div>
-                                <div class="stat-card">
-                                    <div class="stat-value">${summary.totalSubscriptions}</div>
-                                    <div class="stat-label">발견된 구독</div>
+                                <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between">
+                                    <div class="text-gray-500 text-sm font-medium mb-2">연간 예상 지출</div>
+                                    <div class="text-3xl font-bold text-gray-900">₩ ${summary.annualProjection.toLocaleString()}</div>
+                                    <div class="mt-4 text-xs text-gray-400">고정 지출 분석 기반</div>
                                 </div>
-                                <div class="stat-card">
-                                    <div class="stat-value">₩${summary.monthlyTotal.toLocaleString()}</div>
-                                    <div class="stat-label">월 지출액</div>
+                                ${summary.cancellationCandidates.length > 0 ? `
+                                <div class="glass-panel rounded-2xl p-6 border-l-4 border-l-red-500 flex flex-col justify-between bg-red-50/30">
+                                    <div class="flex justify-between items-start">
+                                        <div class="text-red-600 text-sm font-bold mb-2">⚠️ 취소 추천 감지</div>
+                                        <span class="bg-red-100 text-red-700 text-[10px] px-2 py-1 rounded-full font-bold">확인 필요</span>
+                                    </div>
+                                    <div class="text-lg font-semibold text-gray-800">${summary.cancellationCandidates[0].serviceName}</div>
+                                    <div class="mt-2 text-xs text-gray-500">장기간 사용 이력 없음</div>
                                 </div>
-                                <div class="stat-card">
-                                    <div class="stat-value">₩${summary.annualProjection.toLocaleString()}</div>
-                                    <div class="stat-label">연간 예상액</div>
+                                ` : `
+                                <div class="glass-panel rounded-2xl p-6 border-l-4 border-l-green-500 flex flex-col justify-between bg-green-50/30">
+                                    <div class="text-green-600 text-sm font-bold mb-2">✅ 모든 구독 활성</div>
+                                    <div class="text-lg font-semibold text-gray-800">정상 운영 중</div>
+                                    <div class="mt-2 text-xs text-gray-500">미사용 구독 없음</div>
                                 </div>
+                                `}
                             `;
+                            document.getElementById('statsCards').innerHTML = statsHtml;
 
-                            document.getElementById('subscriptionList').innerHTML = data.subscriptions.map(sub => `
-                                <div class="list-item">
-                                    <div>
-                                        <div style="font-weight: 600; font-size: 1.1em;">${sub.serviceName}</div>
-                                        <small style="color: #999;">
-                                            ${sub.billingCycle.korean} · ${sub.transactionCount}회 결제
-                                        </small>
-                                    </div>
-                                    <div style="display: flex; gap: 20px; align-items: center;">
-                                        <span class="badge active">${sub.status.korean}</span>
-                                        <div style="font-size: 1.2em; color: #667eea; font-weight: bold;">
-                                            ₩${sub.monthlyAmount.toLocaleString()}/월
-                                        </div>
-                                    </div>
-                                </div>
-                            `).join('');
+                            // 구독 테이블
+                            const tableHtml = subscriptions.map(sub => {
+                                const statusColors = {
+                                    'ACTIVE': 'bg-green-100 text-green-700',
+                                    'INACTIVE': 'bg-gray-100 text-gray-600',
+                                    'PENDING': 'bg-yellow-100 text-yellow-700'
+                                };
+                                const cycleColors = {
+                                    'MONTHLY': 'bg-gray-100 text-gray-600',
+                                    'QUARTERLY': 'bg-indigo-100 text-indigo-700',
+                                    'ANNUAL': 'bg-purple-100 text-purple-700'
+                                };
 
-                            document.getElementById('resultsSection').style.display = 'block';
+                                return `
+                                    <tr class="group hover:bg-gray-50 transition">
+                                        <td class="px-6 py-4">
+                                            <div class="flex items-center gap-3">
+                                                <div class="w-8 h-8 rounded bg-indigo-500 text-white flex items-center justify-center font-bold text-xs">
+                                                    ${sub.serviceName.charAt(0).toUpperCase()}
+                                                </div>
+                                                <span class="font-semibold text-gray-900">${sub.serviceName}</span>
+                                            </div>
+                                        </td>
+                                        <td class="px-6 py-4">
+                                            <span class="${cycleColors[sub.billingCycle] || 'bg-gray-100 text-gray-600'} px-2 py-1 rounded text-xs">
+                                                ${sub.billingCycle.korean}
+                                            </span>
+                                        </td>
+                                        <td class="px-6 py-4 text-gray-900">₩ ${sub.monthlyAmount.toLocaleString()}</td>
+                                        <td class="px-6 py-4 text-indigo-600 font-medium">
+                                            ${sub.nextChargeDate ? formatNextPayment(sub.nextChargeDate) : '-'}
+                                        </td>
+                                        <td class="px-6 py-4">
+                                            <span class="${statusColors[sub.status] || 'bg-gray-100 text-gray-600'} px-2 py-1 rounded text-xs">
+                                                ${sub.status.korean}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                `;
+                            }).join('');
+                            document.getElementById('subscriptionTableBody').innerHTML = tableHtml;
+
+                            // 업데이트 시간
+                            document.getElementById('lastUpdate').textContent = new Date().toLocaleString('ko-KR');
+
+                            document.getElementById('resultsSection').classList.remove('hidden');
                         }
 
+                        function formatNextPayment(dateStr) {
+                            const date = new Date(dateStr);
+                            const today = new Date();
+                            const diffDays = Math.ceil((date - today) / (1000 * 60 * 60 * 24));
+
+                            if (diffDays < 0) return '결제 예정';
+                            if (diffDays === 0) return '오늘 결제';
+                            return `${date.getMonth() + 1}월 ${date.getDate()}일 (D-${diffDays})`;
+                        }
+
+                        // 분석 이력 로드
                         async function loadHistory() {
                             try {
                                 const response = await fetch('/api/history?limit=20');
                                 const histories = await response.json();
 
-                                document.getElementById('historyList').innerHTML = histories.map(h => `
-                                    <div class="list-item">
+                                const historyHtml = histories.map(h => `
+                                    <div class="glass-panel rounded-lg p-4 flex justify-between items-center hover:shadow-md transition">
                                         <div>
-                                            <div style="font-weight: 600;">${h.fileName || '분석 결과'}</div>
-                                            <small style="color: #999;">
+                                            <div class="font-semibold text-gray-900">${h.fileName || '분석 결과'}</div>
+                                            <div class="text-sm text-gray-500 mt-1">
                                                 ${new Date(h.analysisDate).toLocaleString('ko-KR')} ·
                                                 ${h.subscriptionCount}개 구독 · ₩${h.monthlyTotal.toLocaleString()}/월
-                                            </small>
+                                            </div>
                                         </div>
-                                        <button class="btn btn-danger" onclick="deleteHistory('${h.id}', event)">
-                                            삭제
+                                        <button onclick="deleteHistory('${h.id}', event)"
+                                                class="text-red-500 hover:text-red-700 transition">
+                                            <i class="fas fa-trash-alt"></i>
                                         </button>
                                     </div>
                                 `).join('');
+
+                                document.getElementById('historyList').innerHTML = historyHtml ||
+                                    '<div class="text-center text-gray-500 py-8">분석 이력이 없습니다</div>';
                             } catch (error) {
                                 console.error('이력 로드 실패:', error);
                             }
                         }
 
+                        // 변화 이력 로드
                         async function loadChanges() {
                             try {
                                 const response = await fetch('/api/changes?limit=30');
                                 const changes = await response.json();
 
-                                document.getElementById('changesList').innerHTML = changes.map(c => `
-                                    <div style="padding: 12px; border-left: 3px solid #667eea; margin-bottom: 10px; background: #f8f9ff; border-radius: 5px;">
-                                        <div style="font-weight: bold; color: #667eea; margin-bottom: 5px;">
-                                            ${c.changeType.korean}
-                                        </div>
-                                        <div>${c.notes}</div>
-                                        ${c.oldValue && c.newValue ? `<div>${c.oldValue} → ${c.newValue}</div>` : ''}
-                                        <div style="font-size: 0.9em; color: #999; margin-top: 5px;">
-                                            ${new Date(c.changeDate).toLocaleString('ko-KR')}
+                                const changeTypeIcons = {
+                                    'CREATED': '✨',
+                                    'AMOUNT_CHANGED': '💰',
+                                    'STATUS_CHANGED': '🔄',
+                                    'CYCLE_CHANGED': '📅',
+                                    'CANCELLED': '❌'
+                                };
+
+                                const changesHtml = changes.map(c => `
+                                    <div class="glass-panel rounded-lg p-4 border-l-4 border-l-indigo-500">
+                                        <div class="flex items-start justify-between">
+                                            <div class="flex-1">
+                                                <div class="font-semibold text-gray-900 mb-1">
+                                                    ${changeTypeIcons[c.changeType] || '📝'} ${c.changeType.korean}
+                                                </div>
+                                                <div class="text-sm text-gray-600">${c.notes}</div>
+                                                ${c.oldValue && c.newValue ?
+                                                    `<div class="text-sm text-gray-500 mt-2">${c.oldValue} → ${c.newValue}</div>`
+                                                    : ''}
+                                            </div>
+                                            <div class="text-xs text-gray-400 ml-4">
+                                                ${new Date(c.changeDate).toLocaleDateString('ko-KR')}
+                                            </div>
                                         </div>
                                     </div>
                                 `).join('');
+
+                                document.getElementById('changesList').innerHTML = changesHtml ||
+                                    '<div class="text-center text-gray-500 py-8">변화 이력이 없습니다</div>';
                             } catch (error) {
                                 console.error('변화 이력 로드 실패:', error);
                             }
                         }
 
+                        // 이력 삭제
                         async function deleteHistory(id, event) {
                             event.stopPropagation();
                             if (!confirm('정말 삭제하시겠습니까?')) return;
@@ -667,9 +649,12 @@ public class WebServerEnhanced {
                             }
                         }
 
+                        // 보고서 다운로드
                         function downloadReport() {
                             if (currentHistoryId) {
                                 window.location.href = `/api/download-report/${currentHistoryId}`;
+                            } else {
+                                alert('먼저 CSV 파일을 분석해주세요.');
                             }
                         }
                     </script>
