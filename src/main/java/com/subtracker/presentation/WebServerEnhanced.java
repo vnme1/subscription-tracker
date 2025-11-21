@@ -6,16 +6,27 @@ import com.subtracker.application.ComparisonResult;
 import com.subtracker.application.SubscriptionManager;
 import com.subtracker.config.AppConfig;
 import com.subtracker.domain.model.*;
+import com.subtracker.domain.service.BudgetService;
+import com.subtracker.domain.service.CategoryAnalyzer;
 import com.subtracker.infrastructure.database.DatabaseManager;
+import com.subtracker.infrastructure.export.EnhancedCsvExporter;
 import com.subtracker.presentation.dto.ApiResponse;
+import com.subtracker.domain.model.BudgetAlert;
+import com.subtracker.domain.model.CategoryStats;
+import com.subtracker.domain.service.CategoryAnalyzer;
+import com.subtracker.domain.service.BudgetService;
+import com.subtracker.infrastructure.export.EnhancedCsvExporter;
+import java.nio.file.Paths;
 import lombok.extern.slf4j.Slf4j;
 
 import javax.servlet.MultipartConfigElement;
 import javax.servlet.http.Part;
 import java.io.IOException;
 import java.io.InputStream;
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -144,6 +155,85 @@ public class WebServerEnhanced {
             res.type("application/json; charset=utf-8");
             res.body(gson.toJson(ApiResponse.error("서버 오류가 발생했습니다")));
         });
+
+        // 카테고리 분석 API
+        get("/api/category-analysis/:id", (req, res) -> {
+            res.type("application/json; charset=utf-8");
+            String id = req.params("id");
+
+            AnalysisHistory history = subscriptionManager.getHistoryById(id);
+            if (history == null) {
+                res.status(404);
+                return gson.toJson(ApiResponse.error("분석 이력을 찾을 수 없습니다"));
+            }
+
+            CategoryAnalyzer analyzer = new CategoryAnalyzer();
+            Map<CategoryStats.SubscriptionCategory, CategoryStats> stats = analyzer
+                    .analyzeCategoryDistribution(history.getSubscriptions());
+
+            return gson.toJson(ApiResponse.success(stats));
+        });
+
+        // 예산 설정 API
+        post("/api/budget", (req, res) -> {
+            res.type("application/json; charset=utf-8");
+
+            Map<String, Object> body = gson.fromJson(req.body(), Map.class);
+            BigDecimal budget = new BigDecimal(body.get("monthlyBudget").toString());
+            String historyId = body.get("historyId").toString();
+
+            AnalysisHistory history = subscriptionManager.getHistoryById(historyId);
+            if (history == null) {
+                res.status(404);
+                return gson.toJson(ApiResponse.error("분석 이력을 찾을 수 없습니다"));
+            }
+
+            BudgetService budgetService = new BudgetService();
+            BudgetAlert alert = budgetService.createBudgetAlert(budget, history.getSubscriptions());
+
+            return gson.toJson(ApiResponse.success(alert));
+        });
+
+        // CSV Export API
+        get("/api/export/:id", (req, res) -> {
+            String id = req.params("id");
+            String format = req.queryParams("format");
+
+            AnalysisHistory history = subscriptionManager.getHistoryById(id);
+            if (history == null) {
+                res.status(404);
+                return "분석 이력을 찾을 수 없습니다";
+            }
+
+            if ("detailed".equals(format)) {
+                EnhancedCsvExporter exporter = new EnhancedCsvExporter();
+                String fileName = "detailed_report_" + id + ".csv";
+                String filePath = "/temp/" + fileName;
+
+                try {
+                    exporter.exportDetailedReport(filePath, history);
+
+                    res.type("text/csv; charset=utf-8");
+                    res.header("Content-Disposition", "attachment; filename=" + fileName);
+
+                    return Files.readString(Paths.get(filePath));
+                } catch (Exception e) {
+                    log.error("Export 실패", e);
+                    res.status(500);
+                    return "Export 중 오류 발생";
+                }
+            }
+
+            // 기본 Export
+            SubscriptionSummary summary = SubscriptionSummary.from(history.getSubscriptions());
+            String report = summary.generateReport();
+
+            res.type("text/plain; charset=utf-8");
+            res.header("Content-Disposition", "attachment; filename=report_" + id + ".txt");
+
+            return report;
+        });
+
     }
 
     /**
