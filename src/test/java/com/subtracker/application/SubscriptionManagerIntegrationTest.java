@@ -1,14 +1,14 @@
 package com.subtracker.application;
 
-import com.subtracker.application.SubscriptionManager;
+//import com.subtracker.application.SubscriptionManager;
 import com.subtracker.domain.model.AnalysisHistory;
 import com.subtracker.domain.model.Subscription;
 import com.subtracker.domain.model.SubscriptionChange;
 import com.subtracker.infrastructure.database.DatabaseManager;
 import org.junit.jupiter.api.*;
 
-import java.io.File;
-import java.math.BigDecimal;
+//import java.io.File;
+//import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;

@@ -1,12 +1,15 @@
 package com.subtracker.application;
 
 import com.subtracker.domain.model.AnalysisHistory;
+import com.subtracker.domain.model.Subscription;
 import lombok.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 두 분석 결과 비교
@@ -100,16 +103,20 @@ public class ComparisonResult {
      */
     private static void compareSubscriptions(AnalysisHistory older, AnalysisHistory newer,
             ComparisonResult result) {
-        var oldSubs = older.getSubscriptions().stream()
-                .collect(java.util.stream.Collectors.toMap(
-                        s -> s.getServiceName(), s -> s));
 
-        var newSubs = newer.getSubscriptions().stream()
-                .collect(java.util.stream.Collectors.toMap(
-                        s -> s.getServiceName(), s -> s));
+        // ✅ 명시적 타입 선언
+        Map<String, Subscription> oldSubs = older.getSubscriptions().stream()
+                .collect(Collectors.toMap(
+                        Subscription::getServiceName,
+                        sub -> sub));
+
+        Map<String, Subscription> newSubs = newer.getSubscriptions().stream()
+                .collect(Collectors.toMap(
+                        Subscription::getServiceName,
+                        sub -> sub));
 
         // 신규 구독
-        for (var newSub : newer.getSubscriptions()) {
+        for (Subscription newSub : newer.getSubscriptions()) {
             if (!oldSubs.containsKey(newSub.getServiceName())) {
                 result.newSubscriptions.add(SubscriptionDiff.builder()
                         .serviceName(newSub.getServiceName())
@@ -121,7 +128,7 @@ public class ComparisonResult {
         }
 
         // 제거된 구독
-        for (var oldSub : older.getSubscriptions()) {
+        for (Subscription oldSub : older.getSubscriptions()) {
             if (!newSubs.containsKey(oldSub.getServiceName())) {
                 result.removedSubscriptions.add(SubscriptionDiff.builder()
                         .serviceName(oldSub.getServiceName())
@@ -133,8 +140,8 @@ public class ComparisonResult {
         }
 
         // 변경된 구독
-        for (var newSub : newer.getSubscriptions()) {
-            var oldSub = oldSubs.get(newSub.getServiceName());
+        for (Subscription newSub : newer.getSubscriptions()) {
+            Subscription oldSub = oldSubs.get(newSub.getServiceName());
             if (oldSub != null) {
                 boolean changed = false;
                 SubscriptionDiff.SubscriptionDiffBuilder diff = SubscriptionDiff.builder()
@@ -182,32 +189,35 @@ public class ComparisonResult {
 
         if (!newSubscriptions.isEmpty()) {
             summary.append("✨ 신규 구독 (").append(newSubscriptions.size()).append("개):\n");
-            for (var sub : newSubscriptions) {
+            for (SubscriptionDiff sub : newSubscriptions) {
+                // ✅ getter 메서드 사용
                 summary.append(String.format("  + %s: ₩%,.0f/월\n",
-                        sub.serviceName, sub.newAmount));
+                        sub.getServiceName(), sub.getNewAmount()));
             }
             summary.append("\n");
         }
 
         if (!removedSubscriptions.isEmpty()) {
             summary.append("❌ 제거된 구독 (").append(removedSubscriptions.size()).append("개):\n");
-            for (var sub : removedSubscriptions) {
+            for (SubscriptionDiff sub : removedSubscriptions) {
+                // ✅ getter 메서드 사용
                 summary.append(String.format("  - %s: ₩%,.0f/월\n",
-                        sub.serviceName, sub.oldAmount));
+                        sub.getServiceName(), sub.getOldAmount()));
             }
             summary.append("\n");
         }
 
         if (!changedSubscriptions.isEmpty()) {
             summary.append("🔄 변경된 구독 (").append(changedSubscriptions.size()).append("개):\n");
-            for (var sub : changedSubscriptions) {
-                if (sub.oldAmount != null && sub.newAmount != null) {
+            for (SubscriptionDiff sub : changedSubscriptions) {
+                // ✅ getter 메서드 사용
+                if (sub.getOldAmount() != null && sub.getNewAmount() != null) {
                     summary.append(String.format("  • %s: ₩%,.0f → ₩%,.0f\n",
-                            sub.serviceName, sub.oldAmount, sub.newAmount));
+                            sub.getServiceName(), sub.getOldAmount(), sub.getNewAmount()));
                 }
-                if (sub.oldStatus != null && sub.newStatus != null) {
+                if (sub.getOldStatus() != null && sub.getNewStatus() != null) {
                     summary.append(String.format("    상태: %s → %s\n",
-                            sub.oldStatus, sub.newStatus));
+                            sub.getOldStatus(), sub.getNewStatus()));
                 }
             }
         }

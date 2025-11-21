@@ -11,11 +11,7 @@ import com.subtracker.domain.service.CategoryAnalyzer;
 import com.subtracker.infrastructure.database.DatabaseManager;
 import com.subtracker.infrastructure.export.EnhancedCsvExporter;
 import com.subtracker.presentation.dto.ApiResponse;
-import com.subtracker.domain.model.BudgetAlert;
-import com.subtracker.domain.model.CategoryStats;
-import com.subtracker.domain.service.CategoryAnalyzer;
-import com.subtracker.domain.service.BudgetService;
-import com.subtracker.infrastructure.export.EnhancedCsvExporter;
+
 import java.nio.file.Paths;
 import lombok.extern.slf4j.Slf4j;
 
@@ -26,7 +22,6 @@ import java.io.InputStream;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -178,6 +173,7 @@ public class WebServerEnhanced {
         post("/api/budget", (req, res) -> {
             res.type("application/json; charset=utf-8");
 
+            @SuppressWarnings("unchecked")
             Map<String, Object> body = gson.fromJson(req.body(), Map.class);
             BigDecimal budget = new BigDecimal(body.get("monthlyBudget").toString());
             String historyId = body.get("historyId").toString();
